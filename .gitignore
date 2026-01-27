@@ -1,0 +1,48 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# Editor / IDE
+.idea/
+*.iml
+.vscode/
+*.swp
+*.swo
+*~
+
+# Clojure / JVM
+target/
+.cpcache/
+.klipse-cache/
+.nrepl-port
+.repl-port
+*.class
+.clj-kondo/
+.cljfmt/
+.lsp/
+
+# Node / React frontend
+node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.pnpm-debug.log*
+dist/
+build/
+.next/
+.nuxt/
+.parcel-cache/
+.vite/
+.cache/
+coverage/
+*.tsbuildinfo
+
+# Env and secrets
+.env
+.env.local
+.env.*.local
+*.pem
+
+# Logs and misc
+*.log
+logs/
