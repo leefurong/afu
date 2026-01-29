@@ -22,11 +22,7 @@
   (let [tx-data [{:account/id (java.util.UUID/randomUUID)
                   :account/username username
                   :account/password-hash (hashers/derive password)}]]
-    (try
-      (d/transact conn {:tx-data tx-data})
-      (catch Exception e
-        (println "创建用户失败:" (.getMessage e))
-        nil))))
+    (d/transact conn {:tx-data tx-data})))
 
 (defn user-exists?
   "检查用户名是否已经被注册"
