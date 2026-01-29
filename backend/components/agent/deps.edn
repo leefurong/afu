@@ -1,0 +1,4 @@
+{:paths ["src"]
+ :deps {com.datomic/peer {:mvn/version "..."}
+        clj-http/clj-http {:mvn/version "..."}
+        cheshire/cheshire {:mvn/version "..."}}} ;; JSON处理

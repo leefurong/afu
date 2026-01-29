@@ -1,2 +1,7 @@
-{:paths ["src"]
- :main-opts ["-m" "hello.core"]}
+{:deps {afu/agent {:local/root "components/agent"}
+        afu/web-server {:local/root "components/web-server"}
+
+        ;; 开发工具
+        org.clojure/tools.namespace {:mvn/version "1.4.4"}}
+
+ :aliases {:dev {:extra-paths ["development/src"]}}}

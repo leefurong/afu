@@ -1,0 +1,5 @@
+{:paths ["src"]
+ :deps {metosin/reitit {:mvn/version "..."}
+        ring/ring {:mvn/version "..."}
+        ;; 关键：引用本地的 agent 模块
+        afu/agent {:local/root "../agent"}}}
