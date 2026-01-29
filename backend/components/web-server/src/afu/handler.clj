@@ -3,7 +3,8 @@
             [ring.middleware.json :as ring-json]
             [ring.middleware.cors :as cors]
             [afu.account.core :as account]
-            [afu.db :as db]))
+            [afu.db :as db])
+  (:import [java.io PipedInputStream PipedOutputStream]))
 
 ;; ---------------------------------------------------------------------------
 ;; 登录逻辑：调用 account 组件做真实校验
@@ -28,13 +29,55 @@
        :body   {:error "Invalid credentials"}})))
 
 ;; ---------------------------------------------------------------------------
+;; 流式聊天：POST /api/chat（Mock，PipedInputStream/OutputStream）
+;; ---------------------------------------------------------------------------
+
+(def ^:private mock-chunks
+  ["你好" "！" "我是" "阿福" "，" "很高兴" "见到" "你" "。"])
+
+(defn- last-user-text
+  "从请求 body 中取最后一条用户消息文本。支持 :text 或 :messages 数组最后一条。"
+  [body]
+  (or (get body :text)
+      (when-let [messages (seq (get body :messages))]
+        (let [last-msg (last messages)
+              content  (get last-msg :content)
+              parts    (get last-msg :parts)]
+          (cond
+            (string? content) content
+            (seq parts)
+            (apply str (keep #(when (= "text" (get % :type)) (get % :text)) parts))
+            :else nil)))))
+
+(defn chat-handler
+  "POST /api/chat：解析 JSON body，返回 Mock 流式响应（HTTP Chunked）。
+   Body 为 PipedInputStream，后台 future 向 PipedOutputStream 写入模拟片段。"
+  [request]
+  (let [body (get request :body {})
+        _user-text (last-user-text body)
+        out (PipedOutputStream.)
+        in  (PipedInputStream. out)]
+    (future
+      (try
+        (doseq [s mock-chunks]
+          (.write out (.getBytes s "UTF-8"))
+          (.flush out)
+          (Thread/sleep 100))
+        (finally
+          (try (.close out) (catch Exception _)))))
+    {:status  200
+     :headers {"Content-Type" "text/plain; charset=UTF-8"}
+     :body    in}))
+
+;; ---------------------------------------------------------------------------
 ;; 路由与 Ring Handler
 ;; ---------------------------------------------------------------------------
 
 (def router
   (ring/router
    [["/api"
-     ["/login" {:post login-handler}]]]))
+     ["/login" {:post login-handler}]
+     ["/chat"  {:post chat-handler}]]]))
 
 (defn ring-handler
   "无中间件的纯 Ring handler（供测试或内嵌使用）"
@@ -49,7 +92,7 @@
   {:keywords? true})
 
 (defn wrap-json
-  "解析请求 Body 为 JSON，并将响应的 :body 序列化为 JSON。"
+  "解析请求 Body 为 JSON，并将响应的 :body（map/vector）序列化为 JSON。流式 body（如 InputStream）由 ring-json 原样返回。"
   [handler]
   (-> handler
       (ring-json/wrap-json-body json-options)
@@ -70,7 +113,7 @@
 
 (defn app
   "带 JSON 解析、JSON 响应与 CORS 的 Ring Handler。
-   用于挂载到 Jetty 等服务器，处理 POST /api/login。"
+   用于挂载到 Jetty 等服务器，处理 POST /api/login、POST /api/chat（流式）。"
   []
   (-> (ring-handler)
       wrap-json

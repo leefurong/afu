@@ -5,13 +5,18 @@
 
 (def ^:private default-port 4000)
 
+(def ^:private jetty-defaults
+  "Jetty 选项：小 output-buffer 使 /api/chat 流式响应能及时刷新到客户端。"
+  {:output-buffer-size 1})
+
 (defn start-server
   "启动 Jetty，默认端口 4000。返回 server 实例，便于 stop。"
   ([] (start-server nil))
   ([opts]
    (let [port (or (:port opts) default-port)
-         app  (handler/app)]
-     (jetty/run-jetty app (merge {:port port :join? false} opts)))))
+         app  (handler/app)
+         jetty-opts (merge jetty-defaults {:port port :join? false} opts)]
+     (jetty/run-jetty app jetty-opts))))
 
 (defn -main
   "供 clj -M:web-server 调用：启动 Jetty 并阻塞。
@@ -23,4 +28,4 @@
                  (when-let [p (System/getenv "PORT")] (parse-long p))
                  default-port)]
     (println "Starting web server on http://localhost:" port)
-    (start-server {:port port :join? true})))
+    (start-server (merge jetty-defaults {:port port :join? true}))))
