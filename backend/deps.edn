@@ -4,4 +4,6 @@
 
  :aliases {:dev {:extra-paths ["development/src"]
                  ;; 开发工具
-                 :extra-deps {org.clojure/tools.namespace {:mvn/version "1.4.4"}}}}}
+                 :extra-deps {org.clojure/tools.namespace {:mvn/version "1.4.4"}}}
+
+          :web-server {:main-opts ["-m" "afu.core"]}}}

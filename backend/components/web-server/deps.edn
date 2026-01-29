@@ -2,6 +2,9 @@
  :deps {;; Web 基础
         ring/ring                {:mvn/version "1.12.1"}
         ring/ring-defaults       {:mvn/version "0.5.0"}
+        ring/ring-json           {:mvn/version "0.5.1"}
+        ring/ring-jetty-adapter  {:mvn/version "1.12.2"}
+        ring-cors/ring-cors      {:mvn/version "0.1.13"}
         metosin/reitit           {:mvn/version "0.7.1"}
 
         ;; 工具
