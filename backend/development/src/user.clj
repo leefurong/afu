@@ -1,3 +1,15 @@
-(require '[afu.agent.core :as agent])
+(ns user
+  (:require [afu.account.core :as account]
+            [afu.db]))
 
-(agent/start-agent)
+(defn create-user! [username password]
+  (account/create-account! afu.db/conn username password))
+
+(defn authenticate [username password]
+  (account/authenticate (afu.db/db) username password))
+
+(defn user-exists? [username]
+  (account/user-exists? (afu.db/db) username))
+
+
+

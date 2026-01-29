@@ -1,0 +1,4 @@
+{:deps {com.datomic/local {:mvn/version "1.0.291"}
+        buddy/buddy-hashers {:mvn/version "2.0.167"}
+        afu/database {:local/root "../database"}}
+ :paths ["src"]}

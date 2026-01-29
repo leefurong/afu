@@ -1,7 +1,7 @@
 {:deps {afu/agent {:local/root "components/agent"}
         afu/web-server {:local/root "components/web-server"}
+        afu/account {:local/root "components/account"}}
 
-        ;; 开发工具
-        org.clojure/tools.namespace {:mvn/version "1.4.4"}}
-
- :aliases {:dev {:extra-paths ["development/src"]}}}
+ :aliases {:dev {:extra-paths ["development/src"]
+                 ;; 开发工具
+                 :extra-deps {org.clojure/tools.namespace {:mvn/version "1.4.4"}}}}}
