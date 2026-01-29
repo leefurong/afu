@@ -1,32 +1,29 @@
 (ns afu.handler
   (:require [reitit.ring :as ring]
             [ring.middleware.json :as ring-json]
-            [ring.middleware.cors :as cors]))
+            [ring.middleware.cors :as cors]
+            [afu.account.core :as account]
+            [afu.db :as db]))
 
 ;; ---------------------------------------------------------------------------
-;; 登录逻辑 (Mock：硬编码验证，暂不连数据库)
+;; 登录逻辑：调用 account 组件做真实校验
 ;; ---------------------------------------------------------------------------
-
-(defn- valid-credentials?
-  "硬编码：仅当 username=admin 且 password=password 时通过"
-  [username password]
-  (and (= username "admin")
-       (= password "password")))
 
 (defn login-handler
   "处理 POST /api/login。
    从请求 Body 解析 JSON {:username \"...\" :password \"...\"}，
-   成功返回 200 + token，失败返回 401。"
+   使用 account/authenticate 校验，成功返回 200 + token，失败返回 401。"
   [request]
-  (let [body   (get request :body {})
-        user   (get body :username)
-        pass   (get body :password)]
-    (if (valid-credentials? user pass)
-      ;; 成功 (200 OK)
+  (let [body (get request :body {})
+        username (get body :username)
+        password (get body :password)
+        user (when (and (string? username) (string? password))
+               (account/authenticate (db/db) username password))]
+    (if user
       {:status 200
        :body   {:token   "fake-jwt-token-123456"
-                :message "Login successful"}}
-      ;; 失败 (401 Unauthorized)
+                :message "Login successful"
+                :user    (select-keys user [:account/username :account/id])}}
       {:status 401
        :body   {:error "Invalid credentials"}})))
 
