@@ -4,8 +4,11 @@ import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import { z } from "zod";
+import { useRouter } from "next/navigation";
 import { User, Lock, Loader2 } from "lucide-react";
 
+import { ApiError } from "@/lib/api-client";
+import { login } from "@/services/auth";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import {
@@ -26,6 +29,7 @@ export type LoginFormValues = z.infer<typeof loginSchema>;
 
 export function LoginForm() {
   const [isLoading, setIsLoading] = useState(false);
+  const router = useRouter();
 
   const form = useForm<LoginFormValues>({
     resolver: zodResolver(loginSchema),
@@ -37,9 +41,15 @@ export function LoginForm() {
 
   async function onSubmit(values: LoginFormValues) {
     setIsLoading(true);
+    form.clearErrors("root");
     try {
-      await new Promise((resolve) => setTimeout(resolve, 1000));
-      console.log("Login data:", values);
+      await login(values);
+      router.push("/");
+      router.refresh();
+    } catch (err) {
+      const message =
+        err instanceof ApiError ? err.message : "Network error. Please try again.";
+      form.setError("root", { message });
     } finally {
       setIsLoading(false);
     }
@@ -93,6 +103,11 @@ export function LoginForm() {
             </FormItem>
           )}
         />
+        {form.formState.errors.root && (
+          <p className="text-sm text-destructive">
+            {form.formState.errors.root.message}
+          </p>
+        )}
         <Button
           type="submit"
           className="w-full"
