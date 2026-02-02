@@ -9,8 +9,14 @@
 (def ^:private config
   "Moonshot/Kimi 基本配置，全文件复用。"
   {:api-key (System/getenv "MOONSHOT_API_KEY")
-   :base-url "https://api.moonshot.ai/v1"
+   :base-url "https://api.moonshot.cn/v1"
    :model "kimi-k2-turbo-preview"})
+
+(def ^:private config-multi-modal
+  "Moonshot/Kimi 多模态配置"
+  {:api-key (System/getenv "MOONSHOT_API_KEY")
+   :base-url "https://api.moonshot.cn/v1"
+   :model "kimi-k2.5"})
 
 (deftest make-client-returns-client
   (testing "make-client 返回可传给 stream-chat 与 complete 的 client"
@@ -44,10 +50,11 @@
 
 (deftest stream-chat-and-complete-accept-multimodal-messages
   (testing "stream-chat 与 complete 接受多模态 messages（:content 为 vector），返回结构合法"
-    (let [client (make-client config)
+    (let [client (make-client config-multi-modal)
           messages [{:role "user"
                      :content [{:type "text" :text "描述这张图"}
-                               {:type "image_url" :image_url {:url "https://example.com/img.png"}}]}]
+                               ;; Kimi 仅支持 data:image/xxx;base64,... 内联图，不支持外链 URL
+{:type "image_url" :image_url {:url "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="}}]}]
           opts {}]
       (let [ch (stream-chat client messages opts)]
         (is (some? ch))
