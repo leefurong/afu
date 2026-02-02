@@ -1,4 +1,4 @@
-{:paths ["src"]
+{:paths ["src" "test"]
  :deps {org.clojure/core.async {:mvn/version "1.6.681"}
         afu/database {:local/root "../database"}
         com.datomic/local {:mvn/version "1.0.291"}
