@@ -60,7 +60,7 @@
   返回的 client 为不透明值，仅用于传给 stream-chat 与 complete。"
   [opts]
   (merge {:api-key (System/getenv "MOONSHOT_API_KEY")
-          :base-url "https://api.moonshot.ai/v1"
+          :base-url "https://api.moonshot.cn/v1"
           :model "kimi-k2-turbo-preview"}
          opts))
 
