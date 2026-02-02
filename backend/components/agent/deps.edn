@@ -3,4 +3,7 @@
         afu/database {:local/root "../database"}
         com.datomic/local {:mvn/version "1.0.291"}
         clj-http/clj-http {:mvn/version "3.13.0"}
-        cheshire/cheshire {:mvn/version "5.13.0"}}}
+        cheshire/cheshire {:mvn/version "5.13.0"}}
+
+ :aliases {:test {:extra-deps {lambdaisland/kaocha {:mvn/version "1.91.1392"}}
+                  :main-opts ["-m" "kaocha.runner"]}}}
