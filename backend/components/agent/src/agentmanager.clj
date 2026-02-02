@@ -82,6 +82,27 @@
         r (d/q q db agent-id)]
     (inc (or (when (seq r) (apply max (map first r))) 0))))
 
+(defn- latest-version-eids [db agent-id]
+  "返回 [version gene-eid memory-eid]，无则 nil。"
+  (let [vers (d/q '[:find ?v
+                    :in $ ?aid
+                    :where [?e :agent-version/agent-id ?aid]
+                           [?e :agent-version/version ?v]]
+                  db agent-id)
+        v (when (seq vers) (apply max (map first vers)))]
+    (when v
+      (let [res (d/q '[:find ?e
+                       :in $ ?aid ?v
+                       :where [?e :agent-version/agent-id ?aid]
+                              [?e :agent-version/version ?v]]
+                     db agent-id v)
+            e (when (seq res) (d/pull db [:agent-version/version :agent-version/gene :agent-version/memory] (ffirst res)))]
+        (when e
+          (let [eid (fn [x] (if (map? x) (:db/id x) x))]
+            [(:agent-version/version e)
+             (eid (:agent-version/gene e))
+             (eid (:agent-version/memory e))]))))))
+
 (defn- load-agent-version [db id version]
   ;; Client API :find 只支持 find-rel
   (let [v (if (some? version)
@@ -139,6 +160,7 @@
 
 (defn save-agent!
   "保存 agent（含 gene、memory）。按内容哈希去重：gene/memory 未变则复用已有实体，仅新增一条版本记录。
+  若与当前最新版本内容完全一致，则不写入新版本，直接返回当前版本（避免无意义的历史膨胀）。
   conn 为 Datomic 连接；传入的 agent 须含 :agent-id（来自 get-or-create-agent!）。"
   [conn agent]
   (let [db (d/db conn)
@@ -149,12 +171,18 @@
       (throw (ex-info "save-agent requires :agent-id on agent" {:agent agent})))
     (let [gene-eid (:db/id (ensure-gene-entity conn (or gene {})))
           memory-eid (:db/id (ensure-memory-entity conn (or memory {})))
-          v (next-version db agent-id)]
-      (d/transact conn
-                  {:tx-data [{:agent-version/agent-id agent-id
-                              :agent-version/version v
-                              :agent-version/gene gene-eid
-                              :agent-version/memory memory-eid
-                              :agent-version/created-at (java.util.Date.)}]})
-      (assoc agent :version v))))
+          latest (latest-version-eids db agent-id)]
+      (if (and latest
+               (= gene-eid (nth latest 1))
+               (= memory-eid (nth latest 2)))
+        ;; 与最新版本内容一致，不落库
+        (assoc agent :version (first latest))
+        (let [v (next-version db agent-id)]
+          (d/transact conn
+                      {:tx-data [{:agent-version/agent-id agent-id
+                                  :agent-version/version v
+                                  :agent-version/gene gene-eid
+                                  :agent-version/memory memory-eid
+                                  :agent-version/created-at (java.util.Date.)}]})
+          (assoc agent :version v))))))
 

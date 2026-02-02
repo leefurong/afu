@@ -80,7 +80,7 @@
             (agentmanager/save-agent! *conn* a))))))
 
 (deftest save-agent!-content-addressable
-  (testing "相同 gene/memory 多次保存只增加版本，不重复占 gene/memory 实体"
+  (testing "相同 gene/memory 不重复占实体；与最新版本完全一致时不落新版本"
     (let [a (agentmanager/get-or-create-agent! *conn*)
           gene {:same :content}
           memory {:same :mem}
@@ -88,15 +88,14 @@
           a2 (agentmanager/save-agent! *conn* (assoc a1 :gene gene :memory memory))
           a3 (agentmanager/save-agent! *conn* (assoc a2 :gene gene :memory memory))]
       (is (= 2 (:version a1)))
-      (is (= 3 (:version a2)))
-      (is (= 4 (:version a3)))
+      (is (= 2 (:version a2)) "相同内容不落新版本")
+      (is (= 2 (:version a3)))
       ;; 指定版本加载应得到相同内容
-      (let [v2 (agentmanager/get-or-create-agent! *conn* (:agent-id a) 2)
-            v4 (agentmanager/get-or-create-agent! *conn* (:agent-id a) 4)]
+      (let [v2 (agentmanager/get-or-create-agent! *conn* (:agent-id a) 2)]
         (is (= gene (:gene v2)))
-        (is (= gene (:gene v4)))
-        (is (= memory (:memory v2)))
-        (is (= memory (:memory v4)))))))
+        (is (= memory (:memory v2))))
+      ;; 无版本 4
+      (is (nil? (agentmanager/get-or-create-agent! *conn* (:agent-id a) 4))))))
 
 (deftest get-or-create-agent!-nonexistent-id-returns-nil
   (testing "不存在的 id 返回 nil"
