@@ -6,8 +6,12 @@
             [clojure.core.async :as a]
             [cheshire.core :as json]
             [agent :as agent]
+            [agentmanager :as agentmanager]
             [afu.account.core :as account]
             [afu.db :as db]))
+
+;; 目前聊天统一用这个固定 agent id（后续可改为按用户/会话）
+(def ^:private fixed-agent-id #uuid "00000000-0000-0000-0000-000000000001")
 
 ;; ---------------------------------------------------------------------------
 ;; 登录逻辑：调用 account 组件做真实校验
@@ -59,27 +63,32 @@
      :done     {:type "done"})))
 
 (defn- write-event-ch-to-stream
-  "把 event ch 里的事件一股脑儿写成 NDJSON 行写到 out，ch 关闭后结束。"
-  [ch out]
+  "把 event ch 里的事件写成 NDJSON 到 out；遇到 :done 时用 conn 保存返回的 agent。"
+  [ch out conn]
   (loop []
     (when-let [v (a/<!! ch)]
+      (when (= :done (first v))
+        (let [done-agent (second v)]
+          (when (and conn (some? (:agent-id done-agent)))
+            (agentmanager/save-agent! conn done-agent))))
       (.write out (.getBytes (str (event->ndjson-line v) "\n") "UTF-8"))
       (.flush out)
       (recur))))
 
 (defn chat-handler
-  "POST /api/chat：解析 JSON body，调用 agent/chat，把事件 ch 直接桥接到 Ring body（NDJSON 流，含 thinking/content/done）。"
+  "POST /api/chat：通过 manager 取/建固定 id 的 agent，调用 agent/chat 流式返回；收到 :done 时保存 agent。"
   [request]
-  (let [body      (get request :body {})
+  (let [conn      db/conn
+        body      (get request :body {})
         user-text (last-user-text body)
-        current   (agent/->agent nil)
+        current   (agentmanager/get-or-create-agent! conn fixed-agent-id)
         ch        (agent/chat current (or user-text ""))]
     {:status  200
      :headers {"Content-Type" "application/x-ndjson; charset=UTF-8"}
      :body    (ring-io/piped-input-stream
                (fn [out]
                  (try
-                   (write-event-ch-to-stream ch out)
+                   (write-event-ch-to-stream ch out conn)
                    (finally
                      (ring-io/close! out)))))}))
 

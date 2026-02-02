@@ -2,6 +2,7 @@
   (:require [agent :refer [->agent]]
             [memory :refer [->memory]]
             [clojure.edn :as edn]
+            [clojure.tools.logging :as log]
             [datomic.client.api :as d]))
 
 ;;; Schema: content-addressable gene/memory + agent-version
@@ -130,33 +131,42 @@
                 a (->agent gene memory)]
             (assoc a :agent-id id :version (:agent-version/version e))))))))
 
+(defn- create-agent-with-id! [conn agent-id]
+  "用指定 agent-id 创建新 agent 并落库初始版本。"
+  (let [a (->agent nil (->memory))
+        gene (:gene a)
+        memory (:memory a)
+        gene-eid (:db/id (ensure-gene-entity conn (or gene {})))
+        memory-eid (:db/id (ensure-memory-entity conn (or memory {})))
+        v (next-version (d/db conn) agent-id)]
+    (d/transact conn
+                {:tx-data [{:agent-version/agent-id agent-id
+                            :agent-version/version v
+                            :agent-version/gene gene-eid
+                            :agent-version/memory memory-eid
+                            :agent-version/created-at (java.util.Date.)}]})
+    (assoc a :agent-id agent-id :version v)))
+
 (defn get-or-create-agent!
   "conn 为 Datomic 连接；id 可选；version 可选（仅在有 id 时有效）。
   - 无 id：创建新 agent 并落库初始版本。
-  - 有 id、无 version：加载该 agent 的最新版本。
+  - 有 id、无 version：加载该 agent 的最新版本；若不存在则用该 id 创建。
   - 有 id、有 version：加载该 agent 的指定版本（还原历史）。
   返回 agent map，含 :gene :memory :agent-id :version。"
   ([conn] (get-or-create-agent! conn nil nil))
   ([conn id] (get-or-create-agent! conn id nil))
   ([conn id version]
-   (let [db (d/db conn)]
-     (if id
-       (load-agent-version db id version)
-       ;; 创建新 agent
-       (let [agent-id (random-uuid)
-             a (->agent nil (->memory))
-             gene (:gene a)
-             memory (:memory a)]
-         (let [gene-eid (:db/id (ensure-gene-entity conn (or gene {})))
-               memory-eid (:db/id (ensure-memory-entity conn (or memory {})))
-               v (next-version db agent-id)]
-           (d/transact conn
-                       {:tx-data [{:agent-version/agent-id agent-id
-                                   :agent-version/version v
-                                   :agent-version/gene gene-eid
-                                   :agent-version/memory memory-eid
-                                   :agent-version/created-at (java.util.Date.)}]})
-           (assoc a :agent-id agent-id :version v)))))))
+   (let [db (d/db conn)
+         loaded (when id (load-agent-version db id version))
+         result (or loaded
+                   (when (or (nil? id) (nil? version))
+                     (create-agent-with-id! conn (or id (random-uuid)))))]
+     (when result
+       (log/info "[agentmanager] get-or-create-agent! id=" id "version=" version
+                 "=>" (if loaded "loaded" "created")
+                 "agent-id=" (:agent-id result) "version=" (:version result)
+                 "gene=" (pr-str (:gene result)) "memory=" (pr-str (:memory result))))
+     result)))
 
 (defn save-agent!
   "保存 agent（含 gene、memory）。按内容哈希去重：gene/memory 未变则复用已有实体，仅新增一条版本记录。
@@ -175,8 +185,10 @@
       (if (and latest
                (= gene-eid (nth latest 1))
                (= memory-eid (nth latest 2)))
-        ;; 与最新版本内容一致，不落库
-        (assoc agent :version (first latest))
+        (do
+          (log/info "[agentmanager] save-agent! agent-id=" agent-id "=> skipped (same as latest v" (first latest) ")"
+                    "gene=" (pr-str gene) "memory=" (pr-str memory))
+          (assoc agent :version (first latest)))
         (let [v (next-version db agent-id)]
           (d/transact conn
                       {:tx-data [{:agent-version/agent-id agent-id
@@ -184,5 +196,7 @@
                                   :agent-version/gene gene-eid
                                   :agent-version/memory memory-eid
                                   :agent-version/created-at (java.util.Date.)}]})
+          (log/info "[agentmanager] save-agent! agent-id=" agent-id "=> saved version=" v
+                    "gene=" (pr-str gene) "memory=" (pr-str memory))
           (assoc agent :version v))))))
 

@@ -1,6 +1,8 @@
 (ns afu.core
   "Web 服务入口：启动 Jetty，挂载 afu.handler/app。"
   (:require [afu.handler :as handler]
+            [afu.db :as db]
+            [agentmanager :as agentmanager]
             [ring.adapter.jetty :as jetty]))
 
 (def ^:private default-port 4000)
@@ -13,6 +15,7 @@
   "启动 Jetty，默认端口 4000。返回 server 实例，便于 stop。"
   ([] (start-server nil))
   ([opts]
+   (agentmanager/ensure-schema! db/conn)
    (let [port (or (:port opts) default-port)
          app  (handler/app)
          jetty-opts (merge jetty-defaults {:port port :join? false} opts)]

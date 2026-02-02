@@ -6,4 +6,5 @@
                  ;; 开发工具
                  :extra-deps {org.clojure/tools.namespace {:mvn/version "1.4.4"}}}
 
-          :web-server {:main-opts ["-m" "afu.core"]}}}
+          :web-server {:extra-deps {org.slf4j/slf4j-simple {:mvn/version "2.0.9"}}
+             :main-opts ["-m" "afu.core"]}}}
