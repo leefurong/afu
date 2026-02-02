@@ -97,6 +97,14 @@
       ;; 无版本 4
       (is (nil? (agentmanager/get-or-create-agent! *conn* (:agent-id a) 4))))))
 
-(deftest get-or-create-agent!-nonexistent-id-returns-nil
-  (testing "不存在的 id 返回 nil"
-    (is (nil? (agentmanager/get-or-create-agent! *conn* (random-uuid))))))
+(deftest get-or-create-agent!-nonexistent-id-creates-agent
+  (testing "不存在的 id 时用该 id 创建新 agent"
+    (let [id (random-uuid)
+          a (agentmanager/get-or-create-agent! *conn* id)]
+      (is (some? a))
+      (is (= id (:agent-id a)))
+      (is (= 1 (:version a)))
+      ;; 再次用同一 id 应加载到同一 agent
+      (let [loaded (agentmanager/get-or-create-agent! *conn* id)]
+        (is (= id (:agent-id loaded)))
+        (is (= 1 (:version loaded)))))))
