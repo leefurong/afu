@@ -1,5 +1,6 @@
 {:paths ["src"]
- :deps {;; Web 基础
+ :deps {org.clojure/core.async {:mvn/version "1.6.681"}
+        ;; Web 基础
         ring/ring                {:mvn/version "1.12.1"}
         ring/ring-defaults       {:mvn/version "0.5.0"}
         ring/ring-json           {:mvn/version "0.5.1"}

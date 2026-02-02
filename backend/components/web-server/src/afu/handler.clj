@@ -2,9 +2,12 @@
   (:require [reitit.ring :as ring]
             [ring.middleware.json :as ring-json]
             [ring.middleware.cors :as cors]
+            [ring.util.io :as ring-io]
+            [clojure.core.async :as a]
+            [cheshire.core :as json]
+            [agent :as agent]
             [afu.account.core :as account]
-            [afu.db :as db])
-  (:import [java.io PipedInputStream PipedOutputStream]))
+            [afu.db :as db]))
 
 ;; ---------------------------------------------------------------------------
 ;; 登录逻辑：调用 account 组件做真实校验
@@ -29,11 +32,8 @@
        :body   {:error "Invalid credentials"}})))
 
 ;; ---------------------------------------------------------------------------
-;; 流式聊天：POST /api/chat（Mock，PipedInputStream/OutputStream）
+;; 流式聊天：POST /api/chat（委托 agent 组件，流式写回）
 ;; ---------------------------------------------------------------------------
-
-(def ^:private mock-chunks
-  ["你好" "！" "我是" "阿福" "，" "很高兴" "见到" "你" "。"])
 
 (defn- last-user-text
   "从请求 body 中取最后一条用户消息文本。支持 :text 或 :messages 数组最后一条。"
@@ -49,25 +49,39 @@
             (apply str (keep #(when (= "text" (get % :type)) (get % :text)) parts))
             :else nil)))))
 
+(defn- event->ndjson-line
+  "把 agent 事件变成 NDJSON 一行，直接给前端。"
+  [[k v]]
+  (json/generate-string
+   (case k
+     :thinking {:type "thinking" :text v}
+     :content  {:type "content"  :text v}
+     :done     {:type "done"})))
+
+(defn- write-event-ch-to-stream
+  "把 event ch 里的事件一股脑儿写成 NDJSON 行写到 out，ch 关闭后结束。"
+  [ch out]
+  (loop []
+    (when-let [v (a/<!! ch)]
+      (.write out (.getBytes (str (event->ndjson-line v) "\n") "UTF-8"))
+      (.flush out)
+      (recur))))
+
 (defn chat-handler
-  "POST /api/chat：解析 JSON body，返回 Mock 流式响应（HTTP Chunked）。
-   Body 为 PipedInputStream，后台 future 向 PipedOutputStream 写入模拟片段。"
+  "POST /api/chat：解析 JSON body，调用 agent/chat，把事件 ch 直接桥接到 Ring body（NDJSON 流，含 thinking/content/done）。"
   [request]
-  (let [body (get request :body {})
-        _user-text (last-user-text body)
-        out (PipedOutputStream.)
-        in  (PipedInputStream. out)]
-    (future
-      (try
-        (doseq [s mock-chunks]
-          (.write out (.getBytes s "UTF-8"))
-          (.flush out)
-          (Thread/sleep 100))
-        (finally
-          (try (.close out) (catch Exception _)))))
+  (let [body      (get request :body {})
+        user-text (last-user-text body)
+        current   (agent/->agent nil)
+        ch        (agent/chat current (or user-text ""))]
     {:status  200
-     :headers {"Content-Type" "text/plain; charset=UTF-8"}
-     :body    in}))
+     :headers {"Content-Type" "application/x-ndjson; charset=UTF-8"}
+     :body    (ring-io/piped-input-stream
+               (fn [out]
+                 (try
+                   (write-event-ch-to-stream ch out)
+                   (finally
+                     (ring-io/close! out)))))}))
 
 ;; ---------------------------------------------------------------------------
 ;; 路由与 Ring Handler
