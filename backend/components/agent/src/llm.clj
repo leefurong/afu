@@ -75,9 +75,9 @@
   (str "仅可读取以下环境变量：" (str/join "、" (sort sci-env/env-whitelist)) "，其他名称返回 nil。"))
 
 (def execute-clojure-tool
-  "供 complete opts :tools 使用的「执行 Clojure 代码」工具定义（OpenAI/Moonshot 兼容）。"
-  (let [desc (str "在沙箱中执行一段 Clojure 代码并返回结果。除标准 Clojure 外，沙箱内还提供：1) http 命名空间：(http/get \"url\")、(http/post \"url\" {:body \"...\" :headers {...}})，返回 {:status N :headers {...} :body \"...\"} 或 {:error \"...\"}；2) json 命名空间：(json/parse-string \"...\")、(json/write-str {...})；3) env 命名空间：(env/get-env \"VAR_NAME\") 读取环境变量，" env-whitelist-desc " 用于计算、数据处理、调用外部 API（配合 http + json，密钥用 env/get-env 读取上述变量）等。入参为 code（字符串）。返回为 {:ok 结果} 或 {:error 错误信息}，可能带 :out（标准输出）。")
-        code-desc (str "要执行的 Clojure 代码。可写纯计算如 (+ 1 2)；或 HTTP+JSON，如 (http/post \"...\" {:body (json/write-str {:token (env/get-env \"变量名\")}) :headers {\"Content-Type\" \"application/json\"}})，变量名仅限：" (str/join "、" (sort sci-env/env-whitelist)) "。直接使用 json/*、env/get-env，不要 require 其他库。")]
+  "供 complete opts :tools 使用的「执行 Clojure (SCI) 代码」工具定义（OpenAI/Moonshot 兼容）。"
+  (let [desc (str "在 SCI（Small Clojure Interpreter）沙箱中执行一段 Clojure 代码并返回结果。注意：这里是 Clojure (SCI) 子集，不是完整 Clojure。可用范围：1) SCI 提供的 clojure.core（无 Java 互操作、无 require/import）；2) 沙箱内置的 http 命名空间：(http/get \"url\")、(http/post \"url\" {:body \"...\" :headers {...}})，返回 {:status N :headers {...} :body \"...\"} 或 {:error \"...\"}；3) json：(json/parse-string \"...\")、(json/write-str {...})；4) env：(env/get-env \"VAR_NAME\") 读取环境变量，" env-whitelist-desc "。禁止：require/import、Java 互操作、eval/load-file/slurp/spit/read-string 等。入参为 code（字符串）。返回 {:ok 结果} 或 {:error 错误信息}，可能带 :out。")
+        code-desc (str "要执行的 Clojure (SCI) 代码。仅限 SCI 子集：clojure.core 常用函数 + http/json/env，不可 require、不可 Java 互操作。示例：纯计算 (+ 1 2)；或 (http/post \"...\" {:body (json/write-str {:token (env/get-env \"变量名\")}) :headers {\"Content-Type\" \"application/json\"}})，环境变量名仅限：" (str/join "、" (sort sci-env/env-whitelist)) "。直接使用 json/*、env/get-env，不要写 require 或引用其他库。")]
     {:type "function"
      :function {:name "execute_clojure"
                 :description desc
