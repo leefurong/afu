@@ -19,8 +19,7 @@
                        "3) json：(json/parse-string \"...\")、(json/write-str {...})；\n"
                        "4) env：(env/get-env \"VAR_NAME\") 读取环境变量，仅可读取以下环境变量：" wl "，其他名称返回 nil；\n"
                        "5) 如需访问外部数据， 请阅读这块补充说明（结合上述 http + json + env 使用）：\n"
-                       "   · 股票数据：优先使用Tushare。需 env TUSHARE_API_TOKEN。POST https://open.tushare.pro/api，body 为 JSON（api_name、token、params），返回用 json/parse-string 解析。\n\n"
-                       "      · 优先使用daily接口. 注意传递日期范围，避免一下子获取太多不必要的日期数据。"
+                       "   · 股票数据：如果使用Tushare, 需 env TUSHARE_API_TOKEN。POST https://open.tushare.pro/api，body 为 JSON（api_name、token、params），返回用 json/parse-string 解析。\n\n"
                        "禁止：require/import、Java 互操作、eval/load-file/slurp/spit/read-string 等。\n\n"
                        "入参为 code（字符串）。返回 {:ok 结果} 或 {:error 错误信息}，可能带 :out。")
      :parameters {:type "object"
