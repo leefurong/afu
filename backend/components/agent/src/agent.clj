@@ -6,7 +6,10 @@
             [tool-loader :as tool-loader]
             [agent.tools.registry :as tool-registry]
             [clojure.core.async :as a]
-            [clojure.string :as str]))
+            [clojure.string :as str])
+  (:import [java.time LocalDate LocalDateTime ZoneId]
+           [java.time.format DateTimeFormatter]
+           [java.util Locale]))
 
 ;; 工具 handler 在 tool-loader/load-tool-definitions 时按 registry 自动 require 并注册
 
@@ -38,6 +41,25 @@
                 gene
                 (assoc gene :model-opts default-model-opts))]
      {:gene gene :memory memory})))
+
+(def ^:private date-format (DateTimeFormatter/ofPattern "yyyy年M月d日 EEEE" Locale/SIMPLIFIED_CHINESE))
+(def ^:private time-format (DateTimeFormatter/ofPattern "HH:mm"))
+
+(defn- current-datetime-system-content
+  "返回用于 system 消息的当前日期时间描述，保证 LLM 在回答「今天」「最近」时用对日期。"
+  []
+  (let [now (LocalDateTime/now (ZoneId/systemDefault))
+        date-str (.format (LocalDate/now (ZoneId/systemDefault)) date-format)
+        time-str (.format now time-format)]
+    (str "当前日期与时间：" date-str " " time-str "。回答中涉及「今天」「最近」「当前」等时间概念时，请严格以此为准。")))
+
+(defn- messages-with-date-context
+  "在 messages 前插入一条包含当前日期时间的 system 消息（若首条已是 system 则合并日期到其 content 前）。"
+  [messages]
+  (let [date-ctx (current-datetime-system-content)]
+    (if (and (seq messages) (= (get-in (first messages) [:role]) "system"))
+      (update messages 0 update :content #(str date-ctx "\n\n" (or % "")))
+      (into [({:role "system" :content date-ctx})] messages))))
 
 (defn- normalize-messages
   "单条字符串 -> [{:role \"user\" :content s}]；已是 message map 序列则转成 vector。"
@@ -95,7 +117,7 @@
   ([agent message-or-messages] (chat agent message-or-messages nil))
   ([agent message-or-messages opts]
    (let [ch (a/chan 8)
-         messages (normalize-messages message-or-messages)
+         messages (-> message-or-messages normalize-messages messages-with-date-context)
          opts (or opts {})
          use-tools? (seq (:tools opts))
          sci-ctx (:sci-ctx opts)
