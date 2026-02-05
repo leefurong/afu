@@ -1,6 +1,7 @@
 {:paths ["src" "test"]
  :deps {org.clojure/core.async {:mvn/version "1.6.681"}
         org.clojure/tools.logging {:mvn/version "1.2.4"}
+        org.babashka/sci {:mvn/version "0.8.41"}
         afu/database {:local/root "../database"}
         com.datomic/local {:mvn/version "1.0.291"}
         clj-http/clj-http {:mvn/version "3.13.0"}
