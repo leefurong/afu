@@ -5,9 +5,10 @@
   - 使用 sci/init 构建上下文，通过 :namespaces 控制可用符号。
   - 支持无状态单次求值（eval-string）和带状态的会话上下文（create-ctx + eval-string*）。
   - 可选超时、可选捕获 stdout。
-  - 沙箱内提供 http 命名空间：http/get、http/post，用于发起 HTTP 请求。"
+  - 沙箱内提供 http 命名空间：http/get、http/post；json 命名空间：json/parse-string、json/write-str。"
   (:require [sci.core :as sci]
-            [sci-http :as sci-http]))
+            [sci-http :as sci-http]
+            [sci-json :as sci-json]))
 
 ;; ==============================================================================
 ;; 默认选项：使用 SCI 自带 clojure.core，仅 :deny 危险符号
@@ -24,11 +25,13 @@
 
 (defn default-opts
   "返回默认 SCI 选项：SCI 自带 core，:deny 危险符号，无 :classes（无 Java 互操作）。
-  提供 http 命名空间：http/get、http/post 供沙箱代码发起 HTTP 请求。"
+  提供 http 命名空间：http/get、http/post；json 命名空间：json/parse-string、json/write-str。"
   []
   {:deny denied-symbols
-   :namespaces {'http {'get sci-http/http-get
-                       'post sci-http/http-post}}})
+   :namespaces {'http  {'get sci-http/http-get
+                        'post sci-http/http-post}
+                'json  {'parse-string sci-json/parse-string
+                        'write-str   sci-json/write-str}}})
 
 ;; ==============================================================================
 ;; 上下文创建（可选：跨多次求值保持 def/defn 状态）

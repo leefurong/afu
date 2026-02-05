@@ -64,3 +64,9 @@
           (is (or (contains? r :status) (contains? r :error)))
           (when (:status r)
             (is (= 200 (:status r)))))))))
+
+(deftest json-namespace-available
+  (testing "json/parse-string and json/write-str work in sandbox"
+    (is (= {:ok {"a" 1}} (se/eval-string "(json/parse-string \"{\\\"a\\\":1}\")")))
+    (is (= {:ok {:a 1}} (se/eval-string "(json/parse-string \"{\\\"a\\\":1}\" true)")))
+    (is (= {:ok "{\"x\":2}"} (se/eval-string "(json/write-str {:x 2})")))))
