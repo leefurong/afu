@@ -55,33 +55,42 @@
             :else nil)))))
 
 (defn- event->ndjson-line
-  "把 agent 事件变成 NDJSON 一行。conversation-id 在 :done 时带给前端，供后续请求带上。"
+  "把 agent 事件变成 NDJSON 一行。类型与 thinking/content/done 区分：tool_call、tool_result。"
   [[k v] conversation-id]
   (json/generate-string
    (case k
-     :thinking {:type "thinking" :text v}
-     :content  {:type "content"  :text v}
-     :done     (cond-> {:type "done"}
-                 conversation-id (assoc :conversation_id (str conversation-id))))))
+     :thinking   {:type "thinking" :text v}
+     :content    {:type "content" :text v}
+     :tool-call  {:type "tool_call" :name (:name v) :code (:code v)}
+     :tool-result {:type "tool_result" :result v}
+     :done       (cond-> {:type "done"}
+                   conversation-id (assoc :conversation_id (str conversation-id)))
+     ;; 未知类型仍输出，便于调试
+     (cond-> {:type (name k)}
+       (some? v) (assoc :value v)))))
 
 (defn- write-event-ch-to-stream
-  "把 event ch 里的事件写成 NDJSON 到 out；收集 content 用于会话历史；:done 时保存 agent 并追加会话消息。"
+  "把 event ch 里的事件写成 NDJSON 到 out；收集 content 与 tool_call/tool_result 用于会话历史；:done 时保存 agent 并追加会话消息（含工具调用过程）。"
   [ch out conn conversation-id user-text]
-  (let [content-acc (StringBuilder.)]
+  (let [content-acc (StringBuilder.)
+        tool-steps (atom [])]
     (loop []
-      (when-let [v (a/<!! ch)]
-        (case (first v)
-          :content (when (string? (second v))
-                     (.append content-acc (second v)))
-          :done   (do
+      (when-let [ev (a/<!! ch)]
+        (let [k (first ev) v (second ev)]
+          (case k
+            :content (when (string? v)
+                       (.append content-acc v))
+            :tool-call (swap! tool-steps conj {:role "tool_call" :name (:name v) :content (str (:code v))})
+            :tool-result (swap! tool-steps conj {:role "tool_result" :content (pr-str v)})
+            :done (do
                     (when (and conn conversation-id (seq user-text))
                       (conversation/append-messages! conn conversation-id
-                        [{:role "user" :content user-text}
-                         {:role "assistant" :content (str content-acc)}]))
-                    (when (and conn (second v) (some? (:agent-id (second v))))
-                      (agentmanager/save-agent! conn (second v))))
+                        (into [{:role "user" :content user-text}]
+                              (conj (vec @tool-steps) {:role "assistant" :content (str content-acc)}))))
+                    (when (and conn v (some? (:agent-id v)))
+                      (agentmanager/save-agent! conn v))))
           nil)
-        (.write out (.getBytes (str (event->ndjson-line v conversation-id) "\n") "UTF-8"))
+        (.write out (.getBytes (str (event->ndjson-line ev conversation-id) "\n") "UTF-8"))
         (.flush out)
         (recur)))))
 
@@ -103,9 +112,11 @@
         user-text  (last-user-text body)
         conv-id    (or (resolve-conversation-id body) (conversation/create! conn))
         history    (conversation/get-messages conn conv-id)
-        full-msg   (conj (vec history) {:role "user" :content (or user-text "")})
+        ;; 发给 LLM 的只保留 user/assistant/system；tool_call、tool_result 仅用于展示
+        api-msg    (filterv #(contains? #{"user" "assistant" "system"} (:role %)) history)
+        full-msg   (conj api-msg {:role "user" :content (or user-text "")})
         current    (agentmanager/get-or-create-agent! conn fixed-agent-id)
-        ch         (agent/chat current full-msg)]
+        ch         (agent/chat current full-msg agent/chat-with-tools-opts)]
     {:status  200
      :headers {"Content-Type" "application/x-ndjson; charset=UTF-8"}
      :body    (ring-io/piped-input-stream
