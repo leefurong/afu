@@ -66,7 +66,9 @@
   "带 tools 的 complete 循环：直到返回无 tool_calls 的 assistant 消息。
    emit-fn 可选 (fn [event-type payload])，会收到 :tool-call 与 :tool-result，便于流式输出和会话记录。"
   [client messages opts sci-ctx emit-fn]
+  (println "[agent] run-tool-loop: calling llm/complete, messages count =" (count messages))
   (let [resp (llm/complete client messages opts)]
+    (println "[agent] llm/complete returned: tool_calls?" (seq (:tool_calls resp)) "content len =" (count (str (:content resp))))
     (if (seq (:tool_calls resp))
       (let [assistant-msg (assoc resp :content (or (:content resp) ""))
             tool-msgs (mapv (fn [tc]
@@ -82,6 +84,7 @@
                                  :content (pr-str result)}))
                             (:tool_calls resp))
             next-msg (into (conj messages assistant-msg) tool-msgs)]
+        (println "[agent] tool loop recur, next-msg count =" (count next-msg))
         (recur client next-msg opts sci-ctx emit-fn))
       resp)))
 
@@ -102,18 +105,23 @@
          client (llm/make-client model-opts)]
      (if use-tools?
        ;; 工具循环在 thread 中跑，用 >!! 写 ch，避免 run-tool-loop 内 emit-fn 调用 >! 报错（非 go 上下文）
-       (a/thread
-         (try
-           (a/>!! ch [:thinking "思考中..."])
-           (let [emit-fn (fn [k v] (a/>!! ch [k v]))
-                 final (run-tool-loop client messages opts sci-ctx emit-fn)
-                 content (or (:content final) "")]
-             (a/>!! ch [:content content])
-             (a/>!! ch [:done agent]))
-           (catch Exception _e
-             (a/>!! ch [:done agent]))
-           (finally
-             (a/close! ch))))
+       (do
+         (println "[agent] chat with tools, messages count =" (count messages))
+         (a/thread
+           (try
+             (a/>!! ch [:thinking "思考中..."])
+             (println "[agent] emitted :thinking")
+             (let [emit-fn (fn [k v] (a/>!! ch [k v]))
+                   final (run-tool-loop client messages opts sci-ctx emit-fn)
+                   content (or (:content final) "")]
+               (println "[agent] run-tool-loop done, emitting content len =" (count content) "then :done")
+               (a/>!! ch [:content content])
+               (a/>!! ch [:done agent]))
+             (catch Exception e
+               (println "[agent] exception in tool loop:" (.getMessage e))
+               (a/>!! ch [:done agent]))
+             (finally
+               (a/close! ch)))))
        (a/go
          (try
            (a/>! ch [:thinking "思考中..."])

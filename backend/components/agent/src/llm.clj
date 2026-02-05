@@ -103,23 +103,25 @@
   (let [url (chat-url client)
         headers (-> (auth-header client)
                     (assoc "Content-Type" "application/json"))
-        body (request-body client messages opts)
-        resp (http/post url
-                        {:headers headers
-                         :body (json/generate-string body)
-                         :content-type :json
-                         :accept :json
-                         :throw-exceptions false})
-        status (:status resp)
-        body-parsed (when (:body resp) (json/parse-string (:body resp) true))]
-    (if (and (>= status 200) (< status 300))
-      (let [msg (get-in body-parsed [:choices 0 :message])
-            content (get msg :content)
-            tool-calls (get msg :tool_calls)]
-        (cond-> {:role "assistant" :content (or content "")}
-          (seq tool-calls) (assoc :tool_calls tool-calls)))
-      (throw (ex-info "LLM complete request failed"
-                      {:status status :body (:body resp)})))))
+        body (request-body client messages opts)]
+    (println "[llm] complete: POST" url "messages count =" (count (:messages body)))
+    (let [resp (http/post url
+                          {:headers headers
+                           :body (json/generate-string body)
+                           :content-type :json
+                           :accept :json
+                           :throw-exceptions false})
+          status (:status resp)
+          body-parsed (when (:body resp) (json/parse-string (:body resp) true))]
+      (println "[llm] complete: response status =" status)
+      (if (and (>= status 200) (< status 300))
+        (let [msg (get-in body-parsed [:choices 0 :message])
+              content (get msg :content)
+              tool-calls (get msg :tool_calls)]
+          (cond-> {:role "assistant" :content (or content "")}
+            (seq tool-calls) (assoc :tool_calls tool-calls)))
+        (throw (ex-info "LLM complete request failed"
+                        {:status status :body (:body resp)}))))))
 
 (defn stream-chat
   "流式对话：向 LLM 发送 messages，返回一个 channel。

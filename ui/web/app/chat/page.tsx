@@ -7,7 +7,7 @@ import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
-import { Send, Loader2 } from "lucide-react";
+import { Send, Loader2, ChevronRight, ChevronDown } from "lucide-react";
 import { streamChat } from "@/services/chat";
 
 const CHAT_API =
@@ -16,7 +16,18 @@ const CHAT_API =
     : "http://localhost:4000/api/chat";
 
 type MessagePart = { type: "text"; text: string };
-type Message = { id: string; role: "user" | "assistant"; parts: MessagePart[] };
+
+export type StreamStep =
+  | { id: string; type: "thinking"; text: string }
+  | { id: string; type: "tool_call"; name: string; code: string }
+  | { id: string; type: "tool_result"; result: unknown };
+
+type Message = {
+  id: string;
+  role: "user" | "assistant";
+  parts: MessagePart[];
+  steps?: StreamStep[];
+};
 
 function getMessageText(message: Message): string {
   return message.parts
@@ -29,24 +40,102 @@ function newId(): string {
   return crypto.randomUUID();
 }
 
+function stepSummary(step: StreamStep): string {
+  switch (step.type) {
+    case "thinking":
+      return "Thinking";
+    case "tool_call":
+      return step.name;
+    case "tool_result": {
+      const r = step.result as Record<string, unknown>;
+      return r && typeof r.error === "string" ? "Error" : "Result";
+    }
+    default:
+      return "Step";
+  }
+}
+
+function stepBody(step: StreamStep): string {
+  switch (step.type) {
+    case "thinking":
+      return step.text;
+    case "tool_call":
+      return step.code;
+    case "tool_result":
+      return typeof step.result === "string"
+        ? step.result
+        : JSON.stringify(step.result, null, 2);
+    default:
+      return "";
+  }
+}
+
+function CollapsibleStepBlock({
+  step,
+  expanded,
+  onToggle,
+}: {
+  step: StreamStep;
+  expanded: boolean;
+  onToggle: () => void;
+}) {
+  const summary = stepSummary(step);
+  const body = stepBody(step);
+  return (
+    <div className="rounded-md border border-border/60 bg-muted/30 text-sm">
+      <button
+        type="button"
+        onClick={onToggle}
+        className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-muted-foreground hover:bg-muted/50"
+      >
+        {expanded ? (
+          <ChevronDown className="size-4 shrink-0" />
+        ) : (
+          <ChevronRight className="size-4 shrink-0" />
+        )}
+        <span className="truncate">{summary}</span>
+      </button>
+      {expanded && (
+        <div className="max-h-[7.5rem] overflow-y-auto border-t border-border/40">
+          <pre className="whitespace-pre-wrap break-words p-2 font-mono text-xs">
+            {body || "—"}
+          </pre>
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function ChatPage() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
   const [streamingContent, setStreamingContent] = useState("");
-  const [thinking, setThinking] = useState<string | null>(null);
+  const [streamSteps, setStreamSteps] = useState<StreamStep[]>([]);
   const [status, setStatus] = useState<"idle" | "streaming">("idle");
   const [error, setError] = useState<Error | null>(null);
+  const [expandedStepIds, setExpandedStepIds] = useState<Set<string>>(new Set());
+  const [conversationId, setConversationId] = useState<string | null>(null);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const isLoading = status === "streaming";
 
+  const toggleStepExpanded = useCallback((id: string) => {
+    setExpandedStepIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id);
+      else next.add(id);
+      return next;
+    });
+  }, []);
+
   useEffect(() => {
     scrollRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [messages, streamingContent]);
+  }, [messages, streamingContent, streamSteps]);
 
   const clearError = useCallback(() => setError(null), []);
 
   const streamingRef = useRef("");
+  const streamStepsRef = useRef<StreamStep[]>([]);
 
   const handleSubmit = useCallback(
     (e: React.FormEvent) => {
@@ -63,12 +152,26 @@ export default function ChatPage() {
       setInput("");
       setStreamingContent("");
       streamingRef.current = "";
-      setThinking(null);
+      setStreamSteps([]);
+      streamStepsRef.current = [];
       setError(null);
       setStatus("streaming");
 
-      streamChat(CHAT_API, { text }, {
-        onThinking: setThinking,
+      streamChat(
+        CHAT_API,
+        { text, ...(conversationId && { conversation_id: conversationId }) },
+        {
+        onThinking: (t) => {
+          if (t != null) {
+            const step: StreamStep = {
+              id: newId(),
+              type: "thinking",
+              text: t,
+            };
+            streamStepsRef.current = [...streamStepsRef.current, step];
+            setStreamSteps(streamStepsRef.current);
+          }
+        },
         onContent: (chunk) => {
           setStreamingContent((prev) => {
             const next = prev + chunk;
@@ -76,29 +179,53 @@ export default function ChatPage() {
             return next;
           });
         },
-        onDone: () => {
+        onToolCall: (data) => {
+          const step: StreamStep = {
+            id: newId(),
+            type: "tool_call",
+            name: data.name,
+            code: data.code,
+          };
+          streamStepsRef.current = [...streamStepsRef.current, step];
+          setStreamSteps(streamStepsRef.current);
+        },
+        onToolResult: (data) => {
+          const step: StreamStep = {
+            id: newId(),
+            type: "tool_result",
+            result: data,
+          };
+          streamStepsRef.current = [...streamStepsRef.current, step];
+          setStreamSteps(streamStepsRef.current);
+        },
+        onDone: (opts) => {
           const finalContent = streamingRef.current;
+          const steps = streamStepsRef.current;
+          if (opts?.conversation_id) setConversationId(opts.conversation_id);
           setMessages((prev) => [
             ...prev,
             {
               id: newId(),
               role: "assistant",
               parts: [{ type: "text", text: finalContent }],
+              steps: steps.length > 0 ? steps : undefined,
             },
           ]);
           setStreamingContent("");
-          setThinking(null);
+          setStreamSteps([]);
+          streamStepsRef.current = [];
           setStatus("idle");
         },
         onError: (err) => {
           setError(err);
           setStreamingContent("");
-          setThinking(null);
+          setStreamSteps([]);
           setStatus("idle");
         },
-      });
+      }
+    );
     },
-    [input, isLoading]
+    [input, isLoading, conversationId]
   );
 
   return (
@@ -113,7 +240,7 @@ export default function ChatPage() {
           <CardContent className="flex min-h-0 flex-1 flex-col gap-4 p-0">
             <ScrollArea className="flex-1 px-4">
               <div className="flex flex-col gap-4 py-4">
-                {messages.length === 0 && !streamingContent && !thinking && (
+                {messages.length === 0 && !streamingContent && streamSteps.length === 0 && (
                   <p className="text-muted-foreground text-center text-sm">
                     Send a message to start.
                   </p>
@@ -122,39 +249,67 @@ export default function ChatPage() {
                   <div
                     key={message.id}
                     className={cn(
-                      "flex",
+                      "flex flex-col gap-2",
                       message.role === "user"
-                        ? "justify-end"
-                        : "justify-start"
+                        ? "items-end"
+                        : "items-start"
                     )}
                   >
-                    <div
-                      className={cn(
-                        "max-w-[85%] rounded-lg px-3 py-2 text-sm",
-                        message.role === "user"
-                          ? "bg-primary text-primary-foreground"
-                          : "bg-muted/60 text-foreground"
-                      )}
-                    >
-                      {message.role === "user" ? (
-                        <p className="whitespace-pre-wrap break-words">
-                          {getMessageText(message)}
-                        </p>
-                      ) : (
-                        <div className="prose prose-sm dark:prose-invert max-w-none break-words [&_pre]:overflow-x-auto [&_ul]:my-1">
-                          <ReactMarkdown>
-                            {getMessageText(message) || "…"}
-                          </ReactMarkdown>
+                    {message.role === "assistant" &&
+                      message.steps &&
+                      message.steps.length > 0 && (
+                        <div className="flex max-w-[85%] flex-col gap-1">
+                          {message.steps.map((step) => (
+                            <CollapsibleStepBlock
+                              key={step.id}
+                              step={step}
+                              expanded={expandedStepIds.has(step.id)}
+                              onToggle={() => toggleStepExpanded(step.id)}
+                            />
+                          ))}
                         </div>
                       )}
+                    <div
+                      className={cn(
+                        "flex",
+                        message.role === "user"
+                          ? "justify-end"
+                          : "justify-start"
+                      )}
+                    >
+                      <div
+                        className={cn(
+                          "max-w-[85%] rounded-lg px-3 py-2 text-sm",
+                          message.role === "user"
+                            ? "bg-primary text-primary-foreground"
+                            : "bg-muted/60 text-foreground"
+                        )}
+                      >
+                        {message.role === "user" ? (
+                          <p className="whitespace-pre-wrap break-words">
+                            {getMessageText(message)}
+                          </p>
+                        ) : (
+                          <div className="prose prose-sm dark:prose-invert max-w-none break-words [&_pre]:overflow-x-auto [&_ul]:my-1">
+                            <ReactMarkdown>
+                              {getMessageText(message) || "…"}
+                            </ReactMarkdown>
+                          </div>
+                        )}
+                      </div>
                     </div>
                   </div>
                 ))}
-                {thinking != null && (
-                  <div className="flex justify-start">
-                    <div className="max-w-[85%] rounded-lg border border-dashed border-muted-foreground/30 bg-muted/30 px-3 py-2 text-sm text-muted-foreground">
-                      {thinking}
-                    </div>
+                {streamSteps.length > 0 && (
+                  <div className="flex max-w-[85%] flex-col gap-1">
+                    {streamSteps.map((step) => (
+                      <CollapsibleStepBlock
+                        key={step.id}
+                        step={step}
+                        expanded={expandedStepIds.has(step.id)}
+                        onToggle={() => toggleStepExpanded(step.id)}
+                      />
+                    ))}
                   </div>
                 )}
                 {streamingContent && (

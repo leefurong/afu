@@ -77,7 +77,9 @@
     (loop []
       (when-let [ev (a/<!! ch)]
         (let [k (first ev) v (second ev)]
+          (println "[chat] event:" k (case k :content (str "len=" (count (str v))) :tool-call (str "name=" (:name v)) :tool-result "result" :done "done" :thinking (str "text=" (pr-str v)) :else ""))
           (case k
+            :thinking nil
             :content (when (string? v)
                        (.append content-acc v))
             :tool-call (swap! tool-steps conj {:role "tool_call" :name (:name v) :content (str (:code v))})
@@ -110,19 +112,28 @@
   (let [conn       db/conn
         body       (get request :body {})
         user-text  (last-user-text body)
+        _          (println "[chat] request body keys:" (keys body) "user-text len:" (count (str user-text)) "conv-id from body?" (boolean (resolve-conversation-id body)))
         conv-id    (or (resolve-conversation-id body) (conversation/create! conn))
+        _          (println "[chat] conv-id:" conv-id)
         history    (conversation/get-messages conn conv-id)
         ;; 发给 LLM 的只保留 user/assistant/system；tool_call、tool_result 仅用于展示
         api-msg    (filterv #(contains? #{"user" "assistant" "system"} (:role %)) history)
         full-msg   (conj api-msg {:role "user" :content (or user-text "")})
+        _          (println "[chat] full-msg count:" (count full-msg) "calling agent/chat ...")
         current    (agentmanager/get-or-create-agent! conn fixed-agent-id)
-        ch         (agent/chat current full-msg agent/chat-with-tools-opts)]
+        ch         (agent/chat current full-msg agent/chat-with-tools-opts)
+        _          (println "[chat] agent/chat returned ch, returning 200 + stream")]
     {:status  200
      :headers {"Content-Type" "application/x-ndjson; charset=UTF-8"}
      :body    (ring-io/piped-input-stream
                (fn [out]
                  (try
+                   (println "[chat] stream producer started, reading from ch ...")
                    (write-event-ch-to-stream ch out conn conv-id (or user-text ""))
+                   (println "[chat] stream producer finished (ch closed)")
+                   (catch Throwable t
+                     (println "[chat] stream producer error:" (.getMessage t))
+                     (throw t))
                    (finally
                      (ring-io/close! out)))))}))
 

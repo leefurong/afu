@@ -1,22 +1,41 @@
 /**
- * 流式聊天：POST 到后端，消费 NDJSON 流（thinking / content / done），通过回调更新 UI。
+ * 流式聊天：POST 到后端，消费 NDJSON 流（thinking / content / done / tool_call / tool_result），通过回调更新 UI。
  */
+
+export type ToolCallPayload = { name: string; code: string };
+export type ToolResultPayload = unknown; // {:ok v} | {:error "..."} from backend
 
 export type ChatStreamCallbacks = {
   onThinking?: (text: string | null) => void;
   onContent?: (chunk: string) => void;
-  onDone?: () => void;
+  onToolCall?: (data: ToolCallPayload) => void;
+  onToolResult?: (data: ToolResultPayload) => void;
+  /** 收到 done 时调用，若后端返回了 conversation_id 会传入，用于后续请求延续会话 */
+  onDone?: (opts?: { conversation_id?: string }) => void;
   onError?: (err: Error) => void;
 };
 
-type NDJSONEvent = { type: string; text?: string };
+type NDJSONEvent = {
+  type: string;
+  text?: string;
+  name?: string;
+  code?: string;
+  result?: unknown;
+  conversation_id?: string;
+};
+
+export type ChatRequestBody = {
+  text: string;
+  conversation_id?: string;
+};
 
 export async function streamChat(
   apiUrl: string,
-  body: { text: string },
+  body: ChatRequestBody,
   callbacks: ChatStreamCallbacks
 ): Promise<void> {
-  const { onThinking, onContent, onDone, onError } = callbacks;
+  const { onThinking, onContent, onToolCall, onToolResult, onDone, onError } =
+    callbacks;
 
   const res = await fetch(apiUrl, {
     method: "POST",
@@ -58,8 +77,19 @@ export async function streamChat(
             case "content":
               if (event.text != null) onContent?.(event.text);
               break;
+            case "tool_call":
+              if (event.name != null)
+                onToolCall?.({ name: event.name, code: event.code ?? "" });
+              break;
+            case "tool_result":
+              if (event.result !== undefined) onToolResult?.(event.result);
+              break;
             case "done":
-              onDone?.();
+              onDone?.(
+                event.conversation_id
+                  ? { conversation_id: event.conversation_id }
+                  : undefined
+              );
               break;
             default:
               break;
@@ -72,7 +102,12 @@ export async function streamChat(
     if (buffer.trim()) {
       try {
         const event = JSON.parse(buffer.trim()) as NDJSONEvent;
-        if (event.type === "done") onDone?.();
+        if (event.type === "done")
+          onDone?.(
+            event.conversation_id
+              ? { conversation_id: event.conversation_id }
+              : undefined
+          );
       } catch {
         // ignore
       }
