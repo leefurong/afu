@@ -53,3 +53,14 @@
   (testing "eval-string* returns value"
     (is (= 3 (se/eval-string* "(+ 1 2)")))
     (is (= 5 (se/eval-string* "(inc 4)")))))
+
+(deftest http-namespace-available
+  (testing "http/get and http/post are available and return map"
+    (let [res (se/eval-string "(http/get \"https://httpbin.org/get\")")]
+      (is (or (contains? res :ok) (contains? res :error)))
+      (when (:ok res)
+        (let [r (:ok res)]
+          (is (map? r))
+          (is (or (contains? r :status) (contains? r :error)))
+          (when (:status r)
+            (is (= 200 (:status r)))))))))

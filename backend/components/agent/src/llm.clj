@@ -74,9 +74,9 @@
   "供 complete opts :tools 使用的「执行 Clojure 代码」工具定义（OpenAI/Moonshot 兼容）。"
   {:type "function"
    :function {:name "execute_clojure"
-              :description "在沙箱中执行一段 Clojure 代码并返回结果。用于计算、数据处理等。入参为 code（字符串）。返回为 {:ok 结果} 或 {:error 错误信息}，可能带 :out（标准输出）。"
+              :description "在沙箱中执行一段 Clojure 代码并返回结果。除标准 Clojure 外，沙箱内还提供 http 命名空间用于 HTTP 请求：(http/get \"url\") 或 (http/get \"url\" {:timeout-ms 5000 :headers {\"Accept\" \"application/json\"}})、(http/post \"url\" {:body \"...\" :headers {...}})。GET/POST 返回 {:status N :headers {...} :body \"...\"} 或出错时 {:error \"...\"}。用于计算、数据处理、调用外部 API 或抓取网页等。入参为 code（字符串）。返回为 {:ok 结果} 或 {:error 错误信息}，可能带 :out（标准输出）。"
               :parameters {:type "object"
-                           :properties {:code {:type "string" :description "要执行的 Clojure 代码字符串，例如 (+ 1 2) 或 (map inc [1 2 3])。"}}
+                           :properties {:code {:type "string" :description "要执行的 Clojure 代码。可写纯计算如 (+ 1 2)、(map inc [1 2 3])；也可写 HTTP 请求，如 (http/get \"https://api.example.com/data\")、(http/post \"https://...\" {:body \"{\\\"key\\\":1}\" :headers {\"Content-Type\" \"application/json\"}})。"}}
                            :required ["code"]}}})
 
 (defn parse-tool-arguments
