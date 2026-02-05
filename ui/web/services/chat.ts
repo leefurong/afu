@@ -57,6 +57,13 @@ export async function streamChat(
 
   const decoder = new TextDecoder();
   let buffer = "";
+  let doneCalled = false;
+
+  const callOnDone = (opts?: { conversation_id?: string }) => {
+    if (doneCalled) return;
+    doneCalled = true;
+    onDone?.(opts);
+  };
 
   try {
     while (true) {
@@ -85,7 +92,7 @@ export async function streamChat(
               if (event.result !== undefined) onToolResult?.(event.result);
               break;
             case "done":
-              onDone?.(
+              callOnDone(
                 event.conversation_id
                   ? { conversation_id: event.conversation_id }
                   : undefined
@@ -103,7 +110,7 @@ export async function streamChat(
       try {
         const event = JSON.parse(buffer.trim()) as NDJSONEvent;
         if (event.type === "done")
-          onDone?.(
+          callOnDone(
             event.conversation_id
               ? { conversation_id: event.conversation_id }
               : undefined
@@ -111,9 +118,9 @@ export async function streamChat(
       } catch {
         // ignore
       }
-    } else {
-      onDone?.();
     }
+    // 若流结束但从未收到 done 事件（异常断流），仍通知一次以便 UI 退出 loading
+    callOnDone();
   } catch (err) {
     onError?.(err instanceof Error ? err : new Error(String(err)));
   }
