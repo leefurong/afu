@@ -70,3 +70,16 @@
     (is (= {:ok {"a" 1}} (se/eval-string "(json/parse-string \"{\\\"a\\\":1}\")")))
     (is (= {:ok {:a 1}} (se/eval-string "(json/parse-string \"{\\\"a\\\":1}\" true)")))
     (is (= {:ok "{\"x\":2}"} (se/eval-string "(json/write-str {:x 2})")))))
+
+(deftest env-namespace-available
+  (testing "env/get-env returns nil for names not in whitelist"
+    (is (= {:ok nil} (se/eval-string "(env/get-env \"NONEXISTENT_VAR_FOR_TEST\")")))
+    (is (= {:ok nil} (se/eval-string "(env/get-env nil)")))
+    (is (= {:ok nil} (se/eval-string "(env/get-env \"PATH\")"))))
+  (testing "env/get-env returns value only for whitelisted names (TUSHARE_TOKEN, API_KEY in sci_env)"
+    (let [res (se/eval-string "(env/get-env \"TUSHARE_TOKEN\")")]
+      (is (contains? res :ok))
+      (when (:ok res) (is (string? (:ok res)))))
+    (let [res (se/eval-string "(env/get-env \"API_KEY\")")]
+      (is (contains? res :ok))
+      (when (:ok res) (is (string? (:ok res)))))))
