@@ -8,7 +8,8 @@
             [agent :as agent]
             [agentmanager :as agentmanager]
             [afu.account.core :as account]
-            [afu.db :as db]))
+            [afu.db :as db]
+            [conversation :as conversation]))
 
 ;; 目前聊天统一用这个固定 agent id（后续可改为按用户/会话）
 (def ^:private fixed-agent-id #uuid "00000000-0000-0000-0000-000000000001")
@@ -54,41 +55,63 @@
             :else nil)))))
 
 (defn- event->ndjson-line
-  "把 agent 事件变成 NDJSON 一行，直接给前端。"
-  [[k v]]
+  "把 agent 事件变成 NDJSON 一行。conversation-id 在 :done 时带给前端，供后续请求带上。"
+  [[k v] conversation-id]
   (json/generate-string
    (case k
      :thinking {:type "thinking" :text v}
      :content  {:type "content"  :text v}
-     :done     {:type "done"})))
+     :done     (cond-> {:type "done"}
+                 conversation-id (assoc :conversation_id (str conversation-id))))))
 
 (defn- write-event-ch-to-stream
-  "把 event ch 里的事件写成 NDJSON 到 out；遇到 :done 时用 conn 保存返回的 agent。"
-  [ch out conn]
-  (loop []
-    (when-let [v (a/<!! ch)]
-      (when (= :done (first v))
-        (let [done-agent (second v)]
-          (when (and conn (some? (:agent-id done-agent)))
-            (agentmanager/save-agent! conn done-agent))))
-      (.write out (.getBytes (str (event->ndjson-line v) "\n") "UTF-8"))
-      (.flush out)
-      (recur))))
+  "把 event ch 里的事件写成 NDJSON 到 out；收集 content 用于会话历史；:done 时保存 agent 并追加会话消息。"
+  [ch out conn conversation-id user-text]
+  (let [content-acc (StringBuilder.)]
+    (loop []
+      (when-let [v (a/<!! ch)]
+        (case (first v)
+          :content (when (string? (second v))
+                     (.append content-acc (second v)))
+          :done   (do
+                    (when (and conn conversation-id (seq user-text))
+                      (conversation/append-messages! conn conversation-id
+                        [{:role "user" :content user-text}
+                         {:role "assistant" :content (str content-acc)}]))
+                    (when (and conn (second v) (some? (:agent-id (second v))))
+                      (agentmanager/save-agent! conn (second v))))
+          nil)
+        (.write out (.getBytes (str (event->ndjson-line v conversation-id) "\n") "UTF-8"))
+        (.flush out)
+        (recur)))))
+
+(defn- resolve-conversation-id
+  "从 body 取 conversation_id（keyword 或 string），若为 uuid 则返回 UUID，否则 nil。"
+  [body]
+  (let [raw (or (get body :conversation_id) (get body "conversation_id"))]
+    (when raw
+      (if (instance? java.util.UUID raw)
+        raw
+        (try (java.util.UUID/fromString (str raw)) (catch Exception _ nil))))))
 
 (defn chat-handler
-  "POST /api/chat：通过 manager 取/建固定 id 的 agent，调用 agent/chat 流式返回；收到 :done 时保存 agent。"
+  "POST /api/chat：支持会话历史。body 可带 conversation_id（可选）、text 或 messages。
+   无 conversation_id 时新建会话；有则加载历史，拼上本条 user 消息后请求 agent；流式返回，:done 时写回会话并返回 conversation_id。"
   [request]
-  (let [conn      db/conn
-        body      (get request :body {})
-        user-text (last-user-text body)
-        current   (agentmanager/get-or-create-agent! conn fixed-agent-id)
-        ch        (agent/chat current (or user-text ""))]
+  (let [conn       db/conn
+        body       (get request :body {})
+        user-text  (last-user-text body)
+        conv-id    (or (resolve-conversation-id body) (conversation/create! conn))
+        history    (conversation/get-messages conn conv-id)
+        full-msg   (conj (vec history) {:role "user" :content (or user-text "")})
+        current    (agentmanager/get-or-create-agent! conn fixed-agent-id)
+        ch         (agent/chat current full-msg)]
     {:status  200
      :headers {"Content-Type" "application/x-ndjson; charset=UTF-8"}
      :body    (ring-io/piped-input-stream
                (fn [out]
                  (try
-                   (write-event-ch-to-stream ch out conn)
+                   (write-event-ch-to-stream ch out conn conv-id (or user-text ""))
                    (finally
                      (ring-io/close! out)))))}))
 

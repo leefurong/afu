@@ -2,6 +2,7 @@
   "Web 服务入口：启动 Jetty，挂载 afu.handler/app。"
   (:require [afu.handler :as handler]
             [afu.db :as db]
+            [conversation :as conversation]
             [agentmanager :as agentmanager]
             [ring.adapter.jetty :as jetty]))
 
@@ -16,6 +17,7 @@
   ([] (start-server nil))
   ([opts]
    (agentmanager/ensure-schema! db/conn)
+   (conversation/ensure-schema! db/conn)
    (let [port (or (:port opts) default-port)
          app  (handler/app)
          jetty-opts (merge jetty-defaults {:port port :join? false} opts)]

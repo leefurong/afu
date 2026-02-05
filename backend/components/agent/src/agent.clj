@@ -17,18 +17,26 @@
                 (assoc gene :model-opts default-model-opts))]
      {:gene gene :memory memory})))
 
+(defn- normalize-messages
+  "单条字符串 -> [{:role \"user\" :content s}]；已是 message map 序列则转成 vector。"
+  [message-or-messages]
+  (if (string? message-or-messages)
+    [{:role "user" :content message-or-messages}]
+    (vec message-or-messages)))
+
 (defn chat
   "发送消息给 agent，返回一个 ch。
+   message-or-messages：可为单条用户文本（字符串），或完整 messages 列表（vector of {:role :content}），用于带会话历史。
    ch 中事件：[:thinking \"...\"] [:content \"...\"] ... [:done new-agent]。
    使用 gene 的 :model-opts 构建 LLM client，流式请求由 llm/stream-chat 完成。"
-  [agent message]
-  (let [ch (a/chan 8)]
+  [agent message-or-messages]
+  (let [ch (a/chan 8)
+        messages (normalize-messages message-or-messages)]
     (a/go
       (try
         (a/>! ch [:thinking "思考中..."])
         (let [model-opts (:model-opts (:gene agent))
               client (llm/make-client model-opts)
-              messages [{:role "user" :content message}]
               stream-ch (llm/stream-chat client messages {})]
           (loop []
             (when-let [delta (a/<! stream-ch)]
