@@ -72,20 +72,9 @@
 ;; 工具循环：complete → 若有 tool_calls 则执行并写回 → 再 complete
 ;; ---------------------------------------------------------------------------
 
-(defn- execute-one-tool
-  "执行单条 tool_call：按 name 从 registry 查找 handler，调用 (handler args sci-ctx)。
-  返回 result map（{:ok v} 或 {:error \"...\"}）供写 tool 消息与发射 :tool-result。"
-  [tc sci-ctx]
-  (let [name (get-in tc [:function :name])
-        args (llm/parse-tool-arguments (get-in tc [:function :arguments]))
-        handler (tool-registry/get-handler name)]
-    (if (nil? handler)
-      {:error (str "未知工具: " name)}
-      (handler args sci-ctx))))
-
 (defn- run-tool-loop
   "带 tools 的 complete 循环：直到返回无 tool_calls 的 assistant 消息。
-   emit-fn 可选 (fn [event-type payload])，会收到 :tool-call 与 :tool-result，便于流式输出和会话记录。"
+   emit-fn 可选 (fn [event-type payload])，会收到 :tool-call 与 :tool-result。"
   [client messages opts sci-ctx emit-fn]
   (println "[agent] run-tool-loop: calling llm/complete, messages count =" (count messages))
   (let [resp (llm/complete client messages opts)]
@@ -95,16 +84,17 @@
             tool-msgs (mapv (fn [tc]
                               (let [name (get-in tc [:function :name])
                                     args (llm/parse-tool-arguments (get-in tc [:function :arguments]))
-                                    result (execute-one-tool tc sci-ctx)]
-                                (when emit-fn
-                                  (let [base {:name name :arguments args}
-                                        display (when-let [f (tool-registry/get-call-display name)]
-                                                  (f args))]
-                                    (emit-fn :tool-call (merge base display)))
-                                  (emit-fn :tool-result result))
-                                {:role "tool"
-                                 :tool_call_id (get tc :id)
-                                 :content (pr-str result)}))
+                                    tool (tool-registry/get-tool name)]
+                                (if (nil? tool)
+                                  (let [result {:error (str "未知工具: " name)}]
+                                    (when emit-fn (emit-fn :tool-result result))
+                                    {:role "tool" :tool_call_id (get tc :id) :content (pr-str result)})
+                                  (let [result (tool-registry/handle tool args sci-ctx)]
+                                    (when emit-fn
+                                      (emit-fn :tool-call (merge {:name name :arguments args}
+                                                                 (tool-registry/call-display tool args)))
+                                      (emit-fn :tool-result result))
+                                    {:role "tool" :tool_call_id (get tc :id) :content (pr-str result)}))))
                             (:tool_calls resp))
             next-msg (into (conj messages assistant-msg) tool-msgs)]
         (println "[agent] tool loop recur, next-msg count =" (count next-msg))
