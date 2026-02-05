@@ -1,5 +1,5 @@
-(ns sci-json
-  "供 SCI 沙箱内使用的 JSON 能力：parse-string、write-str，基于 cheshire。"
+(ns agent.tools.execute-clojure.json
+  "供 execute_clojure 沙箱内使用的 JSON 能力：parse-string、write-str，基于 cheshire。"
   (:require [cheshire.core :as cheshire]))
 
 (defn parse-string

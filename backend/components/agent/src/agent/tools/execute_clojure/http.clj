@@ -1,5 +1,5 @@
-(ns sci-http
-  "供 SCI 沙箱内调用的 HTTP 能力：get/post，带超时与纯数据返回值。"
+(ns agent.tools.execute-clojure.http
+  "供 execute_clojure 沙箱内调用的 HTTP 能力：get/post，带超时与纯数据返回值。"
   (:require [clj-http.client :as client]))
 
 (def ^:private default-timeout-ms 10000)

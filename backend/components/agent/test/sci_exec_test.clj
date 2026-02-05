@@ -1,7 +1,7 @@
 (ns sci-exec-test
   (:require [clojure.test :refer [deftest is testing]]
             [clojure.string :as str]
-            [sci-exec :as se]))
+            [agent.tools.execute-clojure.exec :as se]))
 
 (deftest eval-string-basic
   (testing "simple expressions return {:ok value}"
@@ -76,10 +76,7 @@
     (is (= {:ok nil} (se/eval-string "(env/get-env \"NONEXISTENT_VAR_FOR_TEST\")")))
     (is (= {:ok nil} (se/eval-string "(env/get-env nil)")))
     (is (= {:ok nil} (se/eval-string "(env/get-env \"PATH\")"))))
-  (testing "env/get-env returns value only for whitelisted names (TUSHARE_TOKEN, API_KEY in sci_env)"
-    (let [res (se/eval-string "(env/get-env \"TUSHARE_TOKEN\")")]
-      (is (contains? res :ok))
-      (when (:ok res) (is (string? (:ok res)))))
-    (let [res (se/eval-string "(env/get-env \"API_KEY\")")]
+  (testing "env/get-env returns value only for whitelisted names (TUSHARE_API_TOKEN in execute_clojure.env)"
+    (let [res (se/eval-string "(env/get-env \"TUSHARE_API_TOKEN\")")]
       (is (contains? res :ok))
       (when (:ok res) (is (string? (:ok res)))))))

@@ -1,5 +1,5 @@
-(ns sci-env
-  "供 SCI 沙箱内读取环境变量：get-env，仅返回白名单内的变量。")
+(ns agent.tools.execute-clojure.env
+  "供 execute_clojure 沙箱内读取环境变量：get-env，仅返回白名单内的变量。")
 
 (def ^:const env-whitelist
   "允许通过 get-env 读取的环境变量名。"

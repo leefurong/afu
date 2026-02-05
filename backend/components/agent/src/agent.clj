@@ -3,20 +3,26 @@
   (:require [memory :refer [->memory]]
             [llm :as llm]
             [llm-models-config :as llm-cfg]
-            [sci-exec :as sci-exec]
+            [tool-loader :as tool-loader]
+            [agent.tools.registry :as tool-registry]
             [clojure.core.async :as a]
             [clojure.string :as str]))
+
+;; 工具 handler 在 tool-loader/load-tool-definitions 时按 registry 自动 require 并注册
 
 (def default-model-opts
   (llm-cfg/get-model-opts :moonshot :kimi-k2-turbo-preview))
 
-(def chat-with-tools-opts
-  "传给 chat 的 opts 以启用「执行 Clojure」工具循环。handler 可直接传此常量。"
-  {:tools [llm/execute-clojure-tool]})
+(defn chat-with-tools-opts
+  "返回传给 chat 的 opts 以启用工具循环。仅包含已注册 handler 的工具。"
+  []
+  (let [defs (tool-loader/load-tool-definitions)
+        names (set (tool-registry/registered-names))]
+    {:tools (filterv #(names (get-in % [:function :name])) defs)}))
 
 (defn print-ch
   "阻塞读取 ch 并打印每个值，直到 ch 关闭。便于 REPL 里查看 (agent/chat ...) 返回的 channel。
-   用法：(agent/print-ch (agent/chat a \"你好\" agent/chat-with-tools-opts))"
+   用法：(agent/print-ch (agent/chat a \"你好\" (agent/chat-with-tools-opts)))"
   [ch]
   (loop []
     (when-let [v (a/<!! ch)]
@@ -44,23 +50,16 @@
 ;; 工具循环：complete → 若有 tool_calls 则执行并写回 → 再 complete
 ;; ---------------------------------------------------------------------------
 
-(def ^:private sci-timeout-ms 10000)
-(def ^:private sci-capture-out? true)
-
 (defn- execute-one-tool
-  "执行单条 tool_call（仅支持 execute_clojure），返回 result map（{:ok v} 或 {:error \"...\"}）供写 tool 消息与发射 :tool-result。"
+  "执行单条 tool_call：按 name 从 registry 查找 handler，调用 (handler args sci-ctx)。
+  返回 result map（{:ok v} 或 {:error \"...\"}）供写 tool 消息与发射 :tool-result。"
   [tc sci-ctx]
   (let [name (get-in tc [:function :name])
-        args (llm/parse-tool-arguments (get-in tc [:function :arguments]))]
-    (if (not= name "execute_clojure")
+        args (llm/parse-tool-arguments (get-in tc [:function :arguments]))
+        handler (tool-registry/get-handler name)]
+    (if (nil? handler)
       {:error (str "未知工具: " name)}
-      (let [code (get args :code)
-            opts (cond-> {:timeout-ms sci-timeout-ms :capture-out? sci-capture-out?}
-                   sci-ctx (assoc :ctx sci-ctx))
-            result (if (str/blank? (str code))
-                     {:error "参数 code 为空"}
-                     (sci-exec/eval-string (str code) opts))]
-        result))))
+      (handler args sci-ctx))))
 
 (defn- run-tool-loop
   "带 tools 的 complete 循环：直到返回无 tool_calls 的 assistant 消息。
@@ -74,10 +73,9 @@
             tool-msgs (mapv (fn [tc]
                               (let [name (get-in tc [:function :name])
                                     args (llm/parse-tool-arguments (get-in tc [:function :arguments]))
-                                    code (str (get args :code))
                                     result (execute-one-tool tc sci-ctx)]
                                 (when emit-fn
-                                  (emit-fn :tool-call {:name name :code code})
+                                  (emit-fn :tool-call {:name name :arguments args})
                                   (emit-fn :tool-result result))
                                 {:role "tool"
                                  :tool_call_id (get tc :id)
@@ -92,7 +90,7 @@
 (defn chat
   "发送消息给 agent，返回一个 ch。
    message-or-messages：可为单条用户文本（字符串），或完整 messages 列表（vector of {:role :content}），用于带会话历史。
-   opts 可选，若含 :tools（如 [llm/execute-clojure-tool]）则走工具循环：非流式 complete 直到无 tool_calls，再输出最终 content。
+   opts 可选，若含 :tools（如 (chat-with-tools-opts) 返回的列表）则走工具循环：非流式 complete 直到无 tool_calls，再输出最终 content。
    ch 中事件：[:thinking \"...\"]、[:tool-call {:name \"...\" :code \"...\"}]、[:tool-result result]、[:content \"...\"]、[:done new-agent]。"
   ([agent message-or-messages] (chat agent message-or-messages nil))
   ([agent message-or-messages opts]

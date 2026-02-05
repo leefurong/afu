@@ -1,7 +1,8 @@
 (ns llm-test
   (:require [clojure.test :refer [deftest is testing]]
             [clojure.core.async :as a]
-            [llm :refer [make-client stream-chat complete execute-clojure-tool parse-tool-arguments]]))
+            [tool-loader :as tool-loader]
+            [llm :refer [make-client stream-chat complete parse-tool-arguments]]))
 
 ;; 以下测试假设 llm 已正确实现，测的是「正常可工作的行为」。
 ;; 需配置 MOONSHOT_API_KEY（Kimi/月之暗面）等环境变量才能通过。
@@ -39,7 +40,8 @@
   (testing "带 :tools 调用 complete 时请求合法，返回含 :role :content，或有 :tool_calls"
     (let [client (make-client config)
           messages [{:role "user" :content "请用你手上的工具计算 (reduce + (range 10))，只调用工具不要猜结果。"}]
-          out (complete client messages {:tools [execute-clojure-tool]})]
+          tools (tool-loader/load-tool-definitions)
+          out (complete client messages {:tools tools})]
       (is (map? out))
       (is (= "assistant" (:role out)))
       (is (contains? out :content))

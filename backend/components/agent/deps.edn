@@ -1,4 +1,4 @@
-{:paths ["src" "test"]
+{:paths ["src" "resources" "test"]
  :deps {org.clojure/core.async {:mvn/version "1.6.681"}
         org.clojure/tools.logging {:mvn/version "1.2.4"}
         org.babashka/sci {:mvn/version "0.8.41"}
