@@ -59,7 +59,7 @@
   (let [date-ctx (current-datetime-system-content)]
     (if (and (seq messages) (= (get-in (first messages) [:role]) "system"))
       (update messages 0 update :content #(str date-ctx "\n\n" (or % "")))
-      (into [({:role "system" :content date-ctx})] messages))))
+      (into [{:role "system" :content date-ctx}] messages))))
 
 (defn- normalize-messages
   "单条字符串 -> [{:role \"user\" :content s}]；已是 message map 序列则转成 vector。"
