@@ -3,7 +3,6 @@
 import { useState, useRef, useEffect, useCallback } from "react";
 import ReactMarkdown from "react-markdown";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { cn } from "@/lib/utils";
@@ -341,12 +340,19 @@ export default function ChatPage() {
               onSubmit={handleSubmit}
               className="flex shrink-0 gap-2 border-t p-4"
             >
-              <Input
+              <textarea
                 value={input}
                 onChange={(e) => setInput(e.target.value)}
-                placeholder="Type a message…"
+                onKeyDown={(e) => {
+                  if (e.key === "Enter" && !e.shiftKey) {
+                    e.preventDefault();
+                    (e.target as HTMLTextAreaElement).form?.requestSubmit();
+                  }
+                }}
+                placeholder="Type a message… (Shift+Enter for new line)"
                 disabled={isLoading}
-                className="min-w-0 flex-1"
+                rows={1}
+                className="border-input placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] dark:bg-input/30 min-h-9 w-full min-w-0 flex-1 resize-y rounded-md border border-input bg-transparent px-3 py-2 text-base shadow-xs outline-none disabled:pointer-events-none disabled:opacity-50 md:text-sm max-h-[12rem]"
               />
               <Button type="submit" disabled={isLoading || !input.trim()} size="icon">
                 {isLoading ? (
