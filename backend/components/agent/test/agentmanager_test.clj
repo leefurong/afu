@@ -33,6 +33,10 @@
 
 (use-fixtures :each with-test-db)
 
+;; 业务内容比较：gene 会带默认 :model-opts，断言时只比较业务字段
+(defn- gene-content [g] (dissoc (or g {}) :model-opts))
+(defn- memory-content [m] (or m {}))
+
 (deftest get-or-create-agent!-create-new
   (testing "无 id 时创建新 agent 并落库"
     (let [a (agentmanager/get-or-create-agent! *conn*)]
@@ -54,8 +58,8 @@
       (let [latest (agentmanager/get-or-create-agent! *conn* id)]
         (is (= id (:agent-id latest)))
         (is (= 3 (:version latest)))
-        (is (= {:x 2} (:gene latest)))
-        (is (= {:m 2} (:memory latest)))))))
+        (is (= {:x 2} (gene-content (:gene latest))))
+        (is (= {:m 2} (memory-content (:memory latest))))))))
 
 (deftest get-or-create-agent!-load-specific-version
   (testing "有 id 和 version 时加载指定版本（还原历史）"
@@ -67,11 +71,11 @@
             v2 (agentmanager/get-or-create-agent! *conn* id 2)
             v3 (agentmanager/get-or-create-agent! *conn* id 3)]
         (is (= 1 (:version v1)))
-        (is (or (nil? (:gene v1)) (= {} (:gene v1))) "v1 gene 为空或 {}")
+        (is (empty? (gene-content (:gene v1))) "v1 gene 业务内容为空（可有默认 :model-opts）")
         (is (= 2 (:version v2)))
-        (is (= {:v 1} (:gene v2)))
+        (is (= {:v 1} (gene-content (:gene v2))))
         (is (= 3 (:version v3)))
-        (is (= {:v 2} (:gene v3)))))))
+        (is (= {:v 2} (gene-content (:gene v3))))))))
 
 (deftest save-agent!-requires-agent-id
   (testing "无 :agent-id 时抛出"
@@ -90,10 +94,10 @@
       (is (= 2 (:version a1)))
       (is (= 2 (:version a2)) "相同内容不落新版本")
       (is (= 2 (:version a3)))
-      ;; 指定版本加载应得到相同内容
+      ;; 指定版本加载应得到相同内容（gene 可能带默认 :model-opts，只比业务内容）
       (let [v2 (agentmanager/get-or-create-agent! *conn* (:agent-id a) 2)]
-        (is (= gene (:gene v2)))
-        (is (= memory (:memory v2))))
+        (is (= gene (gene-content (:gene v2))))
+        (is (= memory (memory-content (:memory v2)))))
       ;; 无版本 4
       (is (nil? (agentmanager/get-or-create-agent! *conn* (:agent-id a) 4))))))
 
