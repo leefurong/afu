@@ -271,7 +271,7 @@ export default function ChatPage() {
                       )}
                     <div
                       className={cn(
-                        "flex",
+                        "flex w-full min-w-0",
                         message.role === "user"
                           ? "justify-end"
                           : "justify-start"
@@ -279,14 +279,14 @@ export default function ChatPage() {
                     >
                       <div
                         className={cn(
-                          "max-w-[85%] rounded-lg px-3 py-2 text-sm",
+                          "w-full min-w-0 max-w-[85%] rounded-lg px-3 py-2 text-sm",
                           message.role === "user"
                             ? "bg-primary text-primary-foreground"
                             : "bg-muted/60 text-foreground"
                         )}
                       >
                         {message.role === "user" ? (
-                          <p className="whitespace-pre-wrap break-words">
+                          <p className="min-w-0 whitespace-pre-wrap break-words">
                             {getMessageText(message)}
                           </p>
                         ) : (
@@ -313,8 +313,8 @@ export default function ChatPage() {
                   </div>
                 )}
                 {streamingContent && (
-                  <div className="flex justify-start">
-                    <div className="max-w-[85%] rounded-lg px-3 py-2 text-sm bg-muted/60 text-foreground">
+                  <div className="flex w-full min-w-0 justify-start">
+                    <div className="w-full min-w-0 max-w-[85%] rounded-lg px-3 py-2 text-sm bg-muted/60 text-foreground">
                       <div className="prose prose-sm dark:prose-invert max-w-none break-words [&_pre]:overflow-x-auto [&_ul]:my-1">
                         <ReactMarkdown>{streamingContent || "…"}</ReactMarkdown>
                       </div>
