@@ -9,16 +9,17 @@
   - 或 content-parts 的 vector（多模态），如
     [{:type \"text\" :text \"...\"} {:type \"image_url\" :image_url {:url \"...\"}}]。
 
-  多模态扩展
-  ----------
-  - 输入：上述 :content 为 vector 时即支持图文等多模态输入。
-  - stream-chat 的 channel 上为 content delta：可为字符串（文本片段）或 map
-    （如 {:type \"text\" :delta \"...\"}、{:type \"image\" :url \"...\"}），调用方按类型分发。
-  - complete 返回的 :content 可为字符串或 vector of parts，与消息格式一致。
+  Tools（工具调用，OpenAI/Moonshot 兼容）
+  ---------------------------------------
+  - 请求：opts 中传 :tools，为 vector of map，每项含 :type :function。
+    :function 含 :name :description :parameters（JSON Schema，含 :type \"object\"、:properties、:required）。
+  - 非流式 complete：若模型返回工具调用，choices[0].message 会带 tool_calls。
+    本命名空间返回的 message 保留 :content 与 :tool_calls（有则存在）。
+    :tool_calls 为 [{:id \"...\" :type \"function\" :function {:name \"...\" :arguments \"{\\\"key\\\":\\\"value\\\"}\"}}]，
+    :arguments 为 JSON 字符串，需自行解析。
+  - 流式 stream-chat：暂不解析 tool_calls，仅推送 content delta。
 
-  配置（实现时）
-  -------------
-  从环境变量读取，如 MOONSHOT_API_KEY（Kimi）、LLM_BASE_URL、LLM_MODEL；opts 可覆盖。"
+  参考文档：https://platform.moonshot.cn 的 API 文档（工具调用）。"
   (:require [cheshire.core :as json]
             [clj-http.client :as http]
             [clojure.core.async :as a]
@@ -48,7 +49,8 @@
     (cond-> {:messages messages}
       (:model merged) (assoc :model (:model merged))
       (contains? merged :temperature) (assoc :temperature (:temperature merged))
-      (:max-tokens merged) (assoc :max_tokens (:max-tokens merged)))))
+      (:max-tokens merged) (assoc :max_tokens (:max-tokens merged))
+      (seq (:tools opts)) (assoc :tools (:tools opts)))))
 
 ;; ---------------------------------------------------------------------------
 ;; 接口
@@ -64,14 +66,38 @@
           :model "kimi-k2-turbo-preview"}
          opts))
 
+;; ---------------------------------------------------------------------------
+;; Tools 定义与解析（供 agent 工具循环使用）
+;; ---------------------------------------------------------------------------
+
+(def execute-clojure-tool
+  "供 complete opts :tools 使用的「执行 Clojure 代码」工具定义（OpenAI/Moonshot 兼容）。"
+  {:type "function"
+   :function {:name "execute_clojure"
+              :description "在沙箱中执行一段 Clojure 代码并返回结果。用于计算、数据处理等。入参为 code（字符串）。返回为 {:ok 结果} 或 {:error 错误信息}，可能带 :out（标准输出）。"
+              :parameters {:type "object"
+                           :properties {:code {:type "string" :description "要执行的 Clojure 代码字符串，例如 (+ 1 2) 或 (map inc [1 2 3])。"}}
+                           :required ["code"]}}})
+
+(defn parse-tool-arguments
+  "解析 tool_call 的 :arguments 字符串为 map。空串或非法 JSON 时返回 nil。"
+  [arguments]
+  (if (str/blank? (str arguments))
+    nil
+    (try
+      (json/parse-string (str arguments) true)
+      (catch Exception _ nil))))
+
 (defn- ensure-api-key [client]
   (when (str/blank? (str (or (:api-key client) "")))
     (throw (ex-info "MOONSHOT_API_KEY 未设置或为空，请在环境变量中配置" {:client (dissoc client :api-key)}))))
 
 (defn complete
   "非流式完成：向 LLM 发送 messages，返回完整回复。
-  返回形如 {:role \"assistant\" :content ...}；:content 可为字符串或 content-parts 的 vector（多模态）。
-  实现时可扩展 :usage 等。opts 同 stream-chat。"
+  opts 可含 :tools（工具定义列表）、:model :temperature :max-tokens 等。
+  返回 message 形如 {:role \"assistant\" :content \"...\"}，当模型发起工具调用时还会带 :tool_calls。
+  :tool_calls 为 [{:id \"...\" :type \"function\" :function {:name \"...\" :arguments \"JSON 字符串\"}}]，
+  其中 :arguments 需调用方用 cheshire/parse-string 解析。无 tool_calls 时不带该键。"
   [client messages opts]
   (ensure-api-key client)
   (let [url (chat-url client)
@@ -87,8 +113,11 @@
         status (:status resp)
         body-parsed (when (:body resp) (json/parse-string (:body resp) true))]
     (if (and (>= status 200) (< status 300))
-      (let [content (get-in body-parsed [:choices 0 :message :content])]
-        {:role "assistant" :content (or content "")})
+      (let [msg (get-in body-parsed [:choices 0 :message])
+            content (get msg :content)
+            tool-calls (get msg :tool_calls)]
+        (cond-> {:role "assistant" :content (or content "")}
+          (seq tool-calls) (assoc :tool_calls tool-calls)))
       (throw (ex-info "LLM complete request failed"
                       {:status status :body (:body resp)})))))
 

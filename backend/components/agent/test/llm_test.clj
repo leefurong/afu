@@ -1,7 +1,7 @@
 (ns llm-test
   (:require [clojure.test :refer [deftest is testing]]
             [clojure.core.async :as a]
-            [llm :refer [make-client stream-chat complete]]))
+            [llm :refer [make-client stream-chat complete execute-clojure-tool parse-tool-arguments]]))
 
 ;; 以下测试假设 llm 已正确实现，测的是「正常可工作的行为」。
 ;; 需配置 MOONSHOT_API_KEY（Kimi/月之暗面）等环境变量才能通过。
@@ -34,6 +34,27 @@
       (is (contains? out :content))
       (is (string? (:content out)))
       (is (seq (:content out)) "content 非空"))))
+
+(deftest complete-with-tools-accepts-tools-and-returns-valid-message
+  (testing "带 :tools 调用 complete 时请求合法，返回含 :role :content，或有 :tool_calls"
+    (let [client (make-client config)
+          messages [{:role "user" :content "请用你手上的工具计算 (reduce + (range 10))，只调用工具不要猜结果。"}]
+          out (complete client messages {:tools [execute-clojure-tool]})]
+      (is (map? out))
+      (is (= "assistant" (:role out)))
+      (is (contains? out :content))
+      (when (seq (:tool_calls out))
+        (doseq [tc (:tool_calls out)]
+          (is (contains? tc :id))
+          (is (contains? tc :function))
+          (is (string? (get-in tc [:function :arguments]))))))))
+
+(deftest parse-tool-arguments-parses-json
+  (testing "parse-tool-arguments 能解析合法 JSON 字符串"
+    (is (= {:code "(+ 1 2)"} (parse-tool-arguments "{\"code\": \"(+ 1 2)\"}")))
+  (testing "空或非法 JSON 返回 nil"
+    (is (nil? (parse-tool-arguments "")))
+    (is (nil? (parse-tool-arguments "not json"))))))
 
 (deftest stream-chat-returns-channel-with-content
   (testing "stream-chat 返回 channel，取完后关闭，且至少有一个内容片段"
