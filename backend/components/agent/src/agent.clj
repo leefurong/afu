@@ -97,7 +97,10 @@
                                     args (llm/parse-tool-arguments (get-in tc [:function :arguments]))
                                     result (execute-one-tool tc sci-ctx)]
                                 (when emit-fn
-                                  (emit-fn :tool-call {:name name :arguments args})
+                                  (let [base {:name name :arguments args}
+                                        display (when-let [f (tool-registry/get-call-display name)]
+                                                  (f args))]
+                                    (emit-fn :tool-call (merge base display)))
                                   (emit-fn :tool-result result))
                                 {:role "tool"
                                  :tool_call_id (get tc :id)
@@ -113,7 +116,7 @@
   "发送消息给 agent，返回一个 ch。
    message-or-messages：可为单条用户文本（字符串），或完整 messages 列表（vector of {:role :content}），用于带会话历史。
    opts 可选，若含 :tools（如 (chat-with-tools-opts) 返回的列表）则走工具循环：非流式 complete 直到无 tool_calls，再输出最终 content。
-   ch 中事件：[:thinking \"...\"]、[:tool-call {:name \"...\" :code \"...\"}]、[:tool-result result]、[:content \"...\"]、[:done new-agent]。"
+   ch 中事件：[:thinking \"...\"]、[:tool-call payload]、[:tool-result result]、[:content \"...\"]、[:done new-agent]；payload 含 :name :arguments，以及该 tool 的 call-display 返回值（若有）。"
   ([agent message-or-messages] (chat agent message-or-messages nil))
   ([agent message-or-messages opts]
    (let [ch (a/chan 8)

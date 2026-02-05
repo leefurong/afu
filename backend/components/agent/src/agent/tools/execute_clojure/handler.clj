@@ -15,5 +15,10 @@
                    sci-ctx (assoc :ctx sci-ctx))]
         (exec/eval-string code opts)))))
 
-;; 加载时注册，供 agent 按 name 查找执行
-(registry/register! "execute_clojure" execute)
+(defn- call-display
+  "本次调用写入展示用 msg 时提供的内容，内聚在本 tool。"
+  [args]
+  {:code (str (or (get args :code) ""))})
+
+;; 加载时注册，供 agent 按 name 查找执行；call-display 由本 tool 提供
+(registry/register! "execute_clojure" {:handler execute :call-display call-display})
