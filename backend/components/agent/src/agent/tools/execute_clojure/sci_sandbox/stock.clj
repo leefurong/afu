@@ -196,10 +196,11 @@
        (let [;; 需要 (ma-days-1 + back-days) 根 K，且区间要覆盖到 till-date（或最近）
              k-need    (+ (dec ma-days) back-days)
              k-request (max 320 (+ k-need 150))
-             ;; 若未传 till-date，先拉近期数据，用最后一条的日期作为截止日
+             ;; 若未传 till-date：拉近期数据（today - 400 天）；若传了 till-date：从 till-date 往前 400 日历日拉，
+             ;; 保证约 320 根 K 能覆盖到 till-date（320*1.5 约 480 天 > 400），与「不传 till-date」时逻辑一致。
              start-d   (if till-date
                          (when-let [d (parse-ymd till-date)]
-                           (date->str (minus-days (next-weekday d) (* 2 k-request))))
+                           (date->str (minus-days (next-weekday d) 400)))
                          (date->str (minus-days (LocalDate/now) 400)))
              k         (get-k (str stock-code) "日k" start-d k-request)]
          (cond
@@ -215,20 +216,28 @@
              (if (or (nil? date-idx) (nil? close-idx))
                {:error "K 线数据缺少 trade_date 或 close 字段"}
                (let [;; 确定截止日：若未传则用数据里最后一天（最近交易日）
-                     till-str (if (str/blank? (str till-date))
-                                (row-date-str (peek items-asc) date-idx)
-                                (str till-date))
+                     till-str   (if (str/blank? (str till-date))
+                                  (row-date-str (peek items-asc) date-idx)
+                                  (str till-date))
                      ;; 最后一个 date <= till-str 的下标
-                     i-end    (last (keep-indexed (fn [i row]
-                                                    (when (<= (compare (row-date-str row date-idx) till-str) 0) i))
-                                                  items-asc))
-                     slice-len (+ (dec ma-days) back-days)
-                     i-start  (when (and (some? i-end) (>= i-end (dec slice-len)))
-                                (max 0 (- i-end slice-len -1)))
-                     slice    (when (and (some? i-start) (some? i-end))
-                                (subvec items-asc i-start (inc i-end)))]
-                 (if (or (nil? slice) (< (count slice) ma-days))
+                     i-end      (last (keep-indexed (fn [i row]
+                                                      (when (<= (compare (row-date-str row date-idx) till-str) 0) i))
+                                                    items-asc))
+                     actual-end (when (some? i-end) (row-date-str (nth items-asc i-end) date-idx))
+                     ;; 用户传了 till-date 但数据未覆盖到该日（如截止日在未来）→ 报错
+                     till-err   (when (and (not (str/blank? (str till-date))) (some? actual-end)
+                                           (neg? (compare actual-end till-str)))
+                                  {:error (str "截止日 " till-str " 无数据，最近交易日为 " actual-end "。")})
+                     slice-len  (when-not till-err (+ (dec ma-days) back-days))
+                     i-start   (when (and (not till-err) (some? i-end) (some? slice-len) (>= i-end (dec slice-len)))
+                                 (max 0 (- i-end slice-len -1)))
+                     slice     (when (and (some? i-start) (some? i-end))
+                                 (subvec items-asc i-start (inc i-end)))]
+                 (cond
+                   till-err   till-err
+                   (or (nil? slice) (< (count slice) ma-days))
                    {:error (str "无法在截止日 " (or till-str till-date) " 前取到 " back-days " 天数据。")}
+                   :else
                    (let [closes    (mapv (fn [row] (parse-close (nth row close-idx nil))) slice)
                          ma-vals   (simple-moving-average closes ma-days)
                          ma-kw     (keyword (str "ma" ma-days))
