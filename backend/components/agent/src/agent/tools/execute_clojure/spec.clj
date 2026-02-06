@@ -1,10 +1,10 @@
 (ns agent.tools.execute-clojure.spec
   "execute_clojure 工具说明与参数 schema，由本工具自行依赖 env 等，不暴露给 tool_loader。"
-  (:require [agent.tools.execute-clojure.env :as env]
+  (:require [agent.tools.execute-clojure.sci-sandbox :as sci-sandbox]
             [clojure.string :as str]))
 
 (defn- env-whitelist-str []
-  (str/join "、" (sort env/env-whitelist)))
+  (str/join "、" (sort sci-sandbox/env-whitelist)))
 
 (defn tool-spec
   "返回本工具的完整 spec map（:name :description :parameters），供 tool_loader 组装 API 用。

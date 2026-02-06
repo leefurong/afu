@@ -1,4 +1,4 @@
-(ns agent.tools.execute-clojure.env
+(ns agent.tools.execute-clojure.sci-sandbox.env
   "供 execute_clojure 沙箱内读取环境变量：get-env，仅返回白名单内的变量。")
 
 (def ^:const env-whitelist

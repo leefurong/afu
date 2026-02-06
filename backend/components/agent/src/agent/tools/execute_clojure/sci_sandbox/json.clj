@@ -1,4 +1,4 @@
-(ns agent.tools.execute-clojure.json
+(ns agent.tools.execute-clojure.sci-sandbox.json
   "供 execute_clojure 沙箱内使用的 JSON 能力：parse-string、write-str，基于 cheshire。"
   (:require [cheshire.core :as cheshire]))
 

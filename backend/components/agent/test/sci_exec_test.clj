@@ -76,7 +76,7 @@
     (is (= {:ok nil} (se/eval-string "(env/get-env \"NONEXISTENT_VAR_FOR_TEST\")")))
     (is (= {:ok nil} (se/eval-string "(env/get-env nil)")))
     (is (= {:ok nil} (se/eval-string "(env/get-env \"PATH\")"))))
-  (testing "env/get-env returns value only for whitelisted names (TUSHARE_API_TOKEN in execute_clojure.env)"
+  (testing "env/get-env returns value only for whitelisted names (TUSHARE_API_TOKEN in sci_sandbox)"
     (let [res (se/eval-string "(env/get-env \"TUSHARE_API_TOKEN\")")]
       (is (contains? res :ok))
       (when (:ok res) (is (string? (:ok res)))))))

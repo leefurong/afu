@@ -1,0 +1,18 @@
+(ns agent.tools.execute-clojure.sci-sandbox
+  "SCI 沙箱能力聚合：http、json、env。对外提供 :namespaces 与 env-whitelist 供 exec/spec 使用。"
+  (:require [agent.tools.execute-clojure.sci-sandbox.env :as env]
+            [agent.tools.execute-clojure.sci-sandbox.http :as http]
+            [agent.tools.execute-clojure.sci-sandbox.json :as json]))
+
+(def env-whitelist
+  "允许沙箱内 env/get-env 读取的环境变量名。"
+  env/env-whitelist)
+
+(defn namespaces-for-sci
+  "返回注入到 SCI 的命名空间映射：http、json、env。"
+  []
+  {'http  {'get  http/http-get
+           'post http/http-post}
+   'json  {'parse-string json/parse-string
+           'write-str    json/write-str}
+   'env   {'get-env env/get-env}})

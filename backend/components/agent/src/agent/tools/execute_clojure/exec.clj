@@ -6,9 +6,7 @@
   - 可选超时、可选捕获 stdout。
   - 沙箱内提供 http、json、env 命名空间（env/get-env 读环境变量）。"
   (:require [sci.core :as sci]
-            [agent.tools.execute-clojure.http :as exec-http]
-            [agent.tools.execute-clojure.json :as exec-json]
-            [agent.tools.execute-clojure.env :as exec-env]))
+            [agent.tools.execute-clojure.sci-sandbox :as sci-sandbox]))
 
 (def ^:private denied-symbols
   "禁止在 agent 代码中使用的符号，避免文件、网络、反射、逃逸沙箱。"
@@ -20,11 +18,7 @@
     read-string])
 
 (defn- namespaces-with-env []
-  {'http  {'get exec-http/http-get
-           'post exec-http/http-post}
-   'json  {'parse-string exec-json/parse-string
-           'write-str   exec-json/write-str}
-   'env   {'get-env exec-env/get-env}})
+  (sci-sandbox/namespaces-for-sci))
 
 (defn default-opts
   "返回默认 SCI 选项：SCI 自带 core，:deny 危险符号，无 :classes（无 Java 互操作）。
