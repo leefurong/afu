@@ -21,13 +21,13 @@
                        "4) env：(env/get-env \"VAR_NAME\") 读取环境变量，仅可读取以下环境变量：" wl "，其他名称返回 nil；\n"
                        "5) stock：\n"
                        "   - K 线：(stock/get-k stock-code dwmsy beg-date count)。stock-code 如 \"000001\"；dwmsy \"日k\"|\"周k\"|\"月k\"；beg-date YYYYMMDD；count 可选、默认 20。返回 {:ok {:fields _ :items _}} 或 {:error _}。\n"
-                       "   - 移动平均 (stock/ma stock-code days & 可选 beg-date num-days)。days 为周期 5/10/20/60；beg-date「从哪一天开始的 MA」YYYYMMDD；num-days 为 beg-date 之后要多少天、默认 1。返回 {:ok {:items [{:trade_date \"YYYYMMDD\" :close x :ma5 y} ...]}}，按日期升序。\n"
-                       "     用法：今天 MA5 → (stock/ma \"000001\" 5)；从某日起 250 天 → (stock/ma \"000001\" 5 \"YYYYMMDD\")；从某日起 5 天 → (stock/ma \"000001\" 5 \"YYYYMMDD\" 5)。\n"
-                       "   - 金叉 (stock/golden-cross stock-code short-days long-days & 可选 beg-date num-days)。短期均线上穿长期均线。返回 {:ok {:crosses [{:date \"YYYYMMDD\" :short_ma x :long_ma y} ...]}} 或 {:error _}。\n"
+                       "   - 移动平均 (stock/ma stock-code days & 可选 till-date back-days)。语义：截止日 till-date（含），往前 back-days 个交易日。不传 till-date 则用最近交易日；back-days 默认 1。返回 {:ok {:items [{:trade_date \"...\" :close x :ma5 y} ...]}}。\n"
+                       "     用法：今天 MA5 → (stock/ma \"000001\" 5)；某日当天 → (stock/ma \"000001\" 5 \"YYYYMMDD\")；某日及前 4 天 → (stock/ma \"000001\" 5 \"YYYYMMDD\" 5)。\n"
+                       "   - 金叉 (stock/golden-cross stock-code short-days long-days & 可选 till-date back-days)。同上语义；back-days 默认 5。返回 {:ok {:crosses [...]}} 或 {:error _}。\n"
                        "6) 如需其他外部数据，可用 http + json + env：例如 Tushare 可 POST http://api.tushare.pro，body 为 JSON（api_name、token、params），返回用 json/parse-string 解析。\n"
                        "7) pprint：(pprint/pprint x) 格式化打印，便于查看复杂结构。\n\n"
                        "禁止：require/import、Java 互操作、eval/load-file/slurp/spit/read-string 等。\n\n"
-                       "入参为 code（字符串）。返回 {:ok 结果} 或 {:error 错误信息}，可能带 :out。")
+                       "入参为 code（字符串）。返回 {:ok 你的最后一条s-expression的执行结果} 或 {:error 错误信息}，可能带 :out。")
      :parameters {:type "object"
                   :properties {:code {:type "string"
                                      :description (str "要执行的 Clojure (SCI) 代码。仅限 SCI 子集：clojure.core 常用函数 + http/json/env/stock/pprint，不可 require、不可 Java 互操作。环境变量名仅限：" wl "。")}}
