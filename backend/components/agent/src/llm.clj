@@ -96,6 +96,10 @@
                     (assoc "Content-Type" "application/json"))
         body (request-body client messages opts)]
     (println "[llm] complete: POST" url "messages count =" (count (:messages body)))
+    (when (#{"1" "true" "yes"} (str/lower-case (str (or (System/getenv "AFU_DEBUG_LLM") ""))))
+      (println "---------- AFU_DEBUG_LLM: 本次请求 body（仅 messages，pretty） ----------")
+      (println (json/generate-string (:messages body) {:pretty true}))
+      (println "----------------------------------------------------------------------"))
     (let [resp (http/post url
                           {:headers headers
                            :body (json/generate-string body)
@@ -122,11 +126,16 @@
   opts 可含 :model :temperature :max-tokens 等，覆盖 client 默认。"
   [client messages opts]
   (ensure-api-key client)
-  (let [ch (a/chan 16)
-        url (chat-url client)
+  (let [url (chat-url client)
         headers (-> (auth-header client)
                     (assoc "Content-Type" "application/json"))
         body (assoc (request-body client messages opts) :stream true)]
+    (println "[llm] stream-chat: POST" url "messages count =" (count (:messages body)))
+    (when (#{"1" "true" "yes"} (str/lower-case (str (or (System/getenv "AFU_DEBUG_LLM") ""))))
+      (println "---------- AFU_DEBUG_LLM: 本次 stream 请求 body（仅 messages，pretty） ----------")
+      (println (json/generate-string (:messages body) {:pretty true}))
+      (println "-------------------------------------------------------------------------------"))
+    (let [ch (a/chan 16)]
     (a/thread
       (try
         (let [resp (http/post url
@@ -155,4 +164,4 @@
         (catch Exception _ nil)
         (finally
           (a/close! ch))))
-    ch))
+    ch)))

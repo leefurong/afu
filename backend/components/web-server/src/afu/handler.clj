@@ -96,6 +96,61 @@
         (.flush out)
         (recur)))))
 
+(defn- history->api-messages
+  "把 DB 里存的会话历史（含 tool_call/tool_result）转成 LLM API 可接受的 messages，保持真实顺序。
+   规则：user/system 原样；连续 tool_call+tool_result 对 → 一条 assistant（带 tool_calls）+ 若干 role=tool。"
+  [history]
+  (when (seq history)
+    (loop [acc [] i 0]
+      (if (>= i (count history))
+        acc
+        (let [msg (nth history i)
+              role (get msg :role "")]
+          (case role
+            ("user" "system")
+            (recur (conj acc (select-keys msg [:role :content])) (inc i))
+
+            "assistant"
+            (recur (conj acc (select-keys msg [:role :content])) (inc i))
+
+            "tool_call"
+            (let [pairs (atom [])
+                  j     (loop [k i]
+                          (if (and (< k (count history))
+                                   (= (get (nth history k) :role) "tool_call"))
+                            (let [tc (nth history k)
+                                  tr (when (< (inc k) (count history))
+                                       (nth history (inc k)))]
+                              (when (and tr (= (get tr :role) "tool_result"))
+                                (swap! pairs conj {:tool-call tc :tool-result tr}))
+                              (recur (+ k 2)))
+                            k))]
+              (if (seq @pairs)
+                (let [pairs-vec (vec @pairs)
+                      tool-calls (mapv (fn [idx pair]
+                                         (let [id (str "hist-" idx)
+                                               tc (:tool-call pair)
+                                               name (get tc :name "unknown")
+                                               code (get tc :content "")]
+                                           {:id id
+                                            :type "function"
+                                            :function {:name name
+                                                       :arguments (json/generate-string {:code code})}}))
+                                       (range (count pairs-vec)) pairs-vec)
+                      tool-msgs (mapv (fn [idx pair]
+                                        {:role "tool"
+                                         :tool_call_id (str "hist-" idx)
+                                         :content (get (:tool-result pair) :content "")})
+                                      (range (count pairs-vec)) pairs-vec)
+                      assistant-msg {:role "assistant"
+                                     :content ""
+                                     :tool_calls tool-calls}]
+                  (recur (into acc (cons assistant-msg tool-msgs)) j))
+                (recur acc (inc i))))
+
+            ;; 未知 role 或 tool_result 单独出现（不应发生）则跳过
+            (recur acc (inc i))))))))
+
 (defn- resolve-conversation-id
   "从 body 取 conversation_id（keyword 或 string），若为 uuid 则返回 UUID，否则 nil。"
   [body]
@@ -116,9 +171,9 @@
         conv-id    (or (resolve-conversation-id body) (conversation/create! conn))
         _          (println "[chat] conv-id:" conv-id)
         history    (conversation/get-messages conn conv-id)
-        ;; 发给 LLM 的只保留 user/assistant/system；tool_call、tool_result 仅用于展示
-        api-msg    (filterv #(contains? #{"user" "assistant" "system"} (:role %)) history)
-        full-msg   (conj api-msg {:role "user" :content (or user-text "")})
+        ;; 发给 LLM 的是完整真实历史（含工具调用顺序），转为 API 格式
+        api-msg    (history->api-messages history)
+        full-msg   (conj (vec api-msg) {:role "user" :content (or user-text "")})
         _          (println "[chat] full-msg count:" (count full-msg) "calling agent/chat ...")
         current    (agentmanager/get-or-create-agent! conn fixed-agent-id)
         opts       (assoc (agent/chat-with-tools-opts) :tool-ctx {:conversation-id conv-id})
