@@ -37,6 +37,24 @@
   "无状态单次求值时使用的共享上下文（不保存 def 等）。"
   (create-ctx))
 
+(defn- result->serializable
+  "将求值结果转为 JSON 可序列化形式，避免 Var 等 Java 对象导致前端/LLM 收不到结果。
+   仅递归处理值，保留 map 的 keyword 键（Cheshire 会序列化为字符串）。"
+  [v]
+  (cond
+    (nil? v) nil
+    (string? v) v
+    (number? v) v
+    (boolean? v) v
+    (keyword? v) v
+    (symbol? v) (str v)
+    (map? v)    (into {} (map (fn [[k v]] [k (result->serializable v)]) v))
+    (vector? v) (mapv result->serializable v)
+    (seq? v)    (doall (map result->serializable (seq v)))
+    (set? v)    (mapv result->serializable (vec v))
+    ;; Var、Object 等无法被 Cheshire 序列化，转为字符串
+    :else       (str v)))
+
 (defn eval-string*
   "在给定 SCI 上下文 ctx 中执行代码字符串，返回求值结果。"
   ([code] (eval-string* shared-ctx code))
@@ -45,6 +63,7 @@
 
 (defn eval-string
   "执行 Clojure 代码字符串，返回 {:ok value} 或 {:error \"...\"}。
+   value 会转为 JSON 可序列化形式（如 def 返回的 Var 转为字符串），确保前端与 LLM 能收到结果。
   opts 可选：:ctx :timeout-ms :capture-out?。"
   ([code] (eval-string code nil))
   ([code opts]
@@ -67,11 +86,11 @@
                (do (future-cancel f)
                    {:error (str "Execution timed out after " timeout-ms " ms")})
                (if capture-out?
-                 {:ok (:result result) :out (:out result)}
-                 {:ok result})))
+                 {:ok (result->serializable (:result result)) :out (:out result)}
+                 {:ok (result->serializable result)})))
            (let [result (body)]
              (if capture-out?
-               {:ok (:result result) :out (:out result)}
-               {:ok result}))))
+               {:ok (result->serializable (:result result)) :out (:out result)}
+               {:ok (result->serializable result)}))))
        (catch Exception e
          {:error (str (.getMessage e))})))))

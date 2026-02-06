@@ -37,6 +37,15 @@
       (is (= {:ok 2} (se/eval-string "(def x 2) x" {:ctx ctx})))
       (is (= {:ok 2} (se/eval-string "x" {:ctx ctx}))))))
 
+(deftest eval-string-def-returns-serializable
+  (testing "bare (def ...) returns {:ok string} so JSON/frontend/LLM get a result (Var -> str)"
+    (let [ctx (se/create-ctx)
+          res (se/eval-string "(def demo \"hello, persistent REPL \")" {:ctx ctx})]
+      (is (contains? res :ok))
+      (is (string? (:ok res)))
+      (is (str/includes? (:ok res) "demo"))
+      (is (= {:ok "hello, persistent REPL "} (se/eval-string "demo" {:ctx ctx}))))))
+
 (comment (deftest eval-string-timeout
            (testing "timeout returns error"
              (let [res (se/eval-string "(range)" {:timeout-ms 50})]
