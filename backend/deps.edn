@@ -6,5 +6,7 @@
                  ;; 开发工具
                  :extra-deps {org.clojure/tools.namespace {:mvn/version "1.4.4"}}}
 
+          :sci-repl {:main-opts ["-m" "agent.tools.execute-clojure.sci-repl"]}
+
           :web-server {:extra-deps {org.slf4j/slf4j-simple {:mvn/version "2.0.9"}}
              :main-opts ["-m" "afu.core"]}}}
