@@ -145,3 +145,15 @@
             items   (get payload :items)]
         (when payload
           (is (= 2 (count items)) "bar-count=2 => exactly 2 rows"))))))
+
+(deftest stock-golden-cross
+  (testing "golden-cross returns :ok with :crosses vector (calls ma twice)"
+    (let [res (se/eval-string "(stock/golden-cross \"000001\" 5 20 \"20250101\" 60)")]
+      (is (contains? res :ok))
+      (let [inner (get res :ok)]
+        (when (contains? inner :ok)
+          (is (vector? (get-in inner [:ok :crosses])) "crosses is a vector")))))
+  (testing "golden-cross short >= long returns error"
+    (let [res (se/eval-string "(stock/golden-cross \"000001\" 20 5)")]
+      (is (contains? res :ok))
+      (is (clojure.string/includes? (str (get-in res [:ok :error])) "短期周期应小于长期周期")))))

@@ -218,3 +218,44 @@
                                     items)]
              {:ok {:fields ["trade_date" "close" ma-key]
                    :items  result-items}})))))))
+
+(defn golden-cross
+  "检测短期均线上穿长期均线（金叉）。内部调用两次 ma，对齐后找 short_ma 由 <= long_ma 变为 > long_ma 的时点。
+   参数: stock-code, short-days, long-days；可选 beg-date、bar-count（与 ma 一致，两次 ma 用同一参数）。
+   返回 {:ok {:crosses [{:date \"YYYYMMDD\" :short_ma x :long_ma y} ...]}} 或 {:error _}，crosses 按日期升序。"
+  ([stock-code short-days long-days]
+   (let [today (LocalDate/now)
+         beg   (date->str (next-weekday (minus-days today 365)))
+         cnt   (max 250 (+ (long (max short-days long-days)) 50))]
+     (golden-cross stock-code short-days long-days beg cnt)))
+  ([stock-code short-days long-days beg-date]
+   (golden-cross stock-code short-days long-days beg-date nil))
+  ([stock-code short-days long-days beg-date bar-count]
+   (let [ma-short (ma (str stock-code) (long short-days) beg-date bar-count)
+         ma-long  (ma (str stock-code) (long long-days) beg-date bar-count)]
+     (cond
+       (:error ma-short) ma-short
+       (:error ma-long)  ma-long
+       (< (long short-days) 2) {:error "短期 MA 周期至少为 2。"}
+       (< (long long-days) 2) {:error "长期 MA 周期至少为 2。"}
+       (>= (long short-days) (long long-days)) {:error "短期周期应小于长期周期（如 5 与 20）。"}
+       :else
+       (let [short-items (get-in ma-short [:ok :items])
+             long-items  (get-in ma-long [:ok :items])
+             n           (min (count short-items) (count long-items))]
+         (if (< n 2)
+           {:ok {:crosses []}}
+           (let [crosses (into []
+                               (comp
+                                (map (fn [i]
+                                       (let [s0 (nth (nth short-items (dec i)) 2)
+                                             l0 (nth (nth long-items (dec i)) 2)
+                                             s1 (nth (nth short-items i) 2)
+                                             l1 (nth (nth long-items i) 2)
+                                             d  (nth (nth short-items i) 0)]
+                                         (when (and (number? s0) (number? l0) (number? s1) (number? l1)
+                                                    (<= s0 l0) (> s1 l1))
+                                           {:date d :short_ma s1 :long_ma l1}))))
+                                (filter some?))
+                               (range 1 n))]
+             {:ok {:crosses crosses}})))))))

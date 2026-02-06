@@ -23,6 +23,7 @@
                        "   - K 线：(stock/get-k stock-code dwmsy beg-date count)。stock-code 如 \"000001\"；dwmsy \"日k\"|\"周k\"|\"月k\"；beg-date YYYYMMDD；count 可选、默认 20。返回 {:ok {:fields _ :items _}} 或 {:error _}。\n"
                        "   - 移动平均 (stock/ma stock-code days & 可选 beg-date bar-count)。days 为周期 5/10/20/60；beg-date 起始日 YYYYMMDD；bar-count 取 K 线条数、默认 250。返回 {:ok {:fields [\"trade_date\" \"close\" \"maN\"] :items [[date close ma] ...]}}，items 升序、最后一行即最近交易日。\n"
                        "     用法：今天 MA5 → (stock/ma \"000001\" 5)；从某日起 → (stock/ma \"000001\" 5 \"YYYYMMDD\")；只要最近 2 条 → (stock/ma \"000001\" 5 \"YYYYMMDD\" 2)。\n"
+                       "   - 金叉 (stock/golden-cross stock-code short-days long-days & 可选 beg-date bar-count)。短期均线上穿长期均线。返回 {:ok {:crosses [{:date \"YYYYMMDD\" :short_ma x :long_ma y} ...]}} 或 {:error _}。\n"
                        "6) 如需其他外部数据，可用 http + json + env：例如 Tushare 可 POST http://api.tushare.pro，body 为 JSON（api_name、token、params），返回用 json/parse-string 解析。\n"
                        "7) pprint：(pprint/pprint x) 格式化打印，便于查看复杂结构。\n\n"
                        "禁止：require/import、Java 互操作、eval/load-file/slurp/spit/read-string 等。\n\n"
