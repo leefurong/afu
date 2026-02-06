@@ -107,3 +107,30 @@
   (testing "stock/get-k 季k returns error (unsupported)"
     (is (= {:ok {:error "暂不支持季k/年k，请使用 日k、周k 或 月k。"}}
            (se/eval-string "(stock/get-k \"000001\" \"季k\" \"20250101\")")))))
+
+(deftest stock-ma
+  (testing "stock/ma with days < 2 returns error"
+    (let [res (se/eval-string "(stock/ma \"000001\" 1)")]
+      (is (contains? res :ok))
+      (is (= {:error "MA 周期 days 至少为 2。"} (get-in res [:ok])))))
+  (testing "stock/ma returns :ok with fields and items when given valid args"
+    (let [res (se/eval-string "(stock/ma \"000001\" 5 \"20250101\" 30)")]
+      (is (contains? res :ok))
+      (let [inner (:ok res)]
+        (when (contains? inner :ok)
+          (let [payload (:ok inner)
+                fields (:fields payload)
+                items  (:items payload)]
+            (is (vector? fields))
+            (is (vector? items))
+            (is (some #(= % "trade_date") fields))
+            (is (some #(= % "close") fields))
+            (when (seq items)
+              ;; 至少最后一行应有 [date close ma]，且 ma 为数字（前 days-1 条 ma 可能为 nil）
+              (let [last-row (peek items)]
+                (is (= 3 (count last-row)))
+                (is (number? (nth last-row 2)) "最后一行的 ma 应为数字"))))))))
+  (testing "stock/ma two-arity (stock-code days) returns map with :ok or :error"
+    (let [res (se/eval-string "(stock/ma \"000001\" 5)")]
+      (is (or (contains? (get res :ok) :ok)
+              (contains? (get res :ok) :error))))))

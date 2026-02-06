@@ -17,4 +17,5 @@
    'json  {'parse-string json/parse-string
            'write-str    json/write-str}
    'env   {'get-env env/get-env}
-   'stock {'get-k stock/get-k}})
+   'stock {'get-k stock/get-k
+           'ma    stock/ma}})

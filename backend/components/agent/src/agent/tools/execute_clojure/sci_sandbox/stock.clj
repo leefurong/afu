@@ -28,6 +28,10 @@
   [^LocalDate d n]
   (.plus d n ChronoUnit/DAYS))
 
+(defn- minus-days
+  [^LocalDate d n]
+  (.minus d n ChronoUnit/DAYS))
+
 (defn- next-weekday
   "若 d 为周六/周日则顺延到下一周一；否则返回 d。"
   [^LocalDate d]
@@ -141,3 +145,73 @@
                                  (fn [items]
                                    (let [items (or items [])]
                                      (reverse (take count (reverse items))))))))))))))))
+
+(defn- field-index
+  [fields name]
+  (first (keep-indexed (fn [i f] (when (= (str f) (str name)) i)) fields)))
+
+(defn- parse-close
+  [v]
+  (cond
+    (number? v) (double v)
+    (string? v) (try (Double/parseDouble v) (catch NumberFormatException _ nil))
+    :else nil))
+
+(defn- simple-moving-average
+  "计算 closes 的 days 日简单移动平均，返回与 closes 等长的序列，前 (dec days) 个为 nil。"
+  [closes days]
+  (let [n (count closes)
+        d (long days)]
+    (mapv (fn [i]
+            (if (< i (dec d))
+              nil
+              (let [seg (subvec closes (inc (- i d)) (inc i))
+                    s (reduce + 0.0 seg)]
+                (/ s d))))
+          (range n))))
+
+(defn ma
+  "计算日 K 收盘价的 N 日简单移动平均。
+   参数:
+   - stock-code: 股票代码，如 \"000001\" 或 \"000001.SZ\"
+   - days: MA 周期，如 5、10、20、60
+   可选:
+   - beg-date: 起始日期 YYYYMMDD，默认约一年前
+   - count: 取 K 线数量，默认 250
+   返回 {:ok {:fields [\"trade_date\" \"close\" \"maN\"] :items [[date close ma] ...]}} 或 {:error \"...\"}，
+   items 按日期升序，前 (days-1) 条无 MA 值（nil）。"
+  ([stock-code days]
+   (let [today (LocalDate/now)
+         beg   (date->str (next-weekday (minus-days today 365)))
+         cnt   (max 250 (+ (long days) 50))]
+     (ma stock-code days beg cnt)))
+  ([stock-code days beg-date bar-count]
+   (let [days  (long days)
+         cnt   (if (or (nil? bar-count) (neg? (long bar-count))) 250 (long bar-count))
+         k     (get-k (str stock-code) "日k" beg-date cnt)]
+     (cond
+       (:error k) k
+       (not (parse-ymd beg-date)) {:error "起始日期格式须为 YYYYMMDD。"}
+       (< days 2) {:error "MA 周期 days 至少为 2。"}
+       :else
+       (let [payload (:ok k)
+             fields  (:fields payload)
+             items   (or (:items payload) [])
+             date-idx (field-index fields "trade_date")
+             close-idx (field-index fields "close")]
+         (if (or (nil? date-idx) (nil? close-idx))
+           {:error "K 线数据缺少 trade_date 或 close 字段"}
+           (let [closes (mapv (fn [row]
+                               (parse-close (nth row close-idx nil)))
+                             items)
+                 ma-key (str "ma" days)
+                 ma-vals (simple-moving-average closes days)
+                 result-items (mapv (fn [i row]
+                                      (let [d (nth row date-idx)
+                                            c (nth closes i)
+                                            m (nth ma-vals i)]
+                                        [d c m]))
+                                    (range (count items))
+                                    items)]
+             {:ok {:fields ["trade_date" "close" ma-key]
+                   :items  result-items}})))))))
