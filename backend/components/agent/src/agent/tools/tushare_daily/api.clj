@@ -23,8 +23,7 @@
     (let [params (build-params args)
           body   (json/generate-string {:api_name "daily"
                                         :token    token
-                                        :params   params})
-          _ (println "body: " body)]
+                                        :params   params})]
       (try
         (let [resp (client/post api-url
                                {:body            body
@@ -36,7 +35,13 @@
           (if (contains? data :code)
             (let [code (long (:code data))]
               (if (zero? code)
-                {:ok (select-keys data [:fields :items])}
+                (let [inner  (or (:data data) data)
+                      payload (-> (select-keys inner [:fields :items])
+                                  (update-vals #(or % [])))
+                      items   (:items payload)
+                      no-data (or (empty? items) (nil? items))]
+                  (cond-> {:ok payload}
+                    no-data (assoc :message "指定股票/日期无行情数据，请检查：1) 日期是否为交易日 2) 日期是否为未来（如 20260205 表示 2026 年）3) 股票代码是否正确。")))
                 {:error (str "Tushare 返回错误: " (or (:msg data) "未知") " (code=" code ")")}))
             {:error "Tushare 返回格式异常"}))
         (catch Exception e
