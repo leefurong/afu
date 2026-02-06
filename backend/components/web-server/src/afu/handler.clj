@@ -121,7 +121,8 @@
         full-msg   (conj api-msg {:role "user" :content (or user-text "")})
         _          (println "[chat] full-msg count:" (count full-msg) "calling agent/chat ...")
         current    (agentmanager/get-or-create-agent! conn fixed-agent-id)
-        ch         (agent/chat current full-msg (agent/chat-with-tools-opts))
+        opts       (assoc (agent/chat-with-tools-opts) :tool-ctx {:conversation-id conv-id})
+        ch         (agent/chat current full-msg opts)
         _          (println "[chat] agent/chat returned ch, returning 200 + stream")]
     {:status  200
      :headers {"Content-Type" "application/x-ndjson; charset=UTF-8"}

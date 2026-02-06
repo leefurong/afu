@@ -13,6 +13,7 @@
   (let [wl (env-whitelist-str)]
     {:name "execute_clojure"
      :description (str "在 SCI（Small Clojure Interpreter）沙箱中执行一段 Clojure 代码并返回结果。注意：这里是 Clojure (SCI) 子集，不是完整 Clojure。\n\n"
+                       "同一会话内多次调用共享执行环境：def、defn 等定义会保留，可先执行一段定义再在后续调用中使用，像 REPL 一样渐进式编程、小步试跑。\n\n"
                        "可用范围：\n"
                        "1) SCI 提供的 clojure.core（无 Java 互操作、无 require/import）；\n"
                        "2) 沙箱内置的 http 命名空间：(http/get \"url\")、(http/post \"url\" {:body \"...\" :headers {...}})，返回 {:status N :headers {...} :body \"...\"} 或 {:error \"...\"}；\n"

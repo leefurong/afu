@@ -17,7 +17,8 @@
   (llm-cfg/get-model-opts :moonshot :kimi-k2-turbo-preview))
 
 (defn chat-with-tools-opts
-  "返回传给 chat 的 opts 以启用工具循环。仅包含已注册 handler 的工具。"
+  "返回传给 chat 的 opts 以启用工具循环。仅包含已注册 handler 的工具。
+   调用方可在 opts 中追加 :tool-ctx（如 {:conversation-id uuid}），agent 原样传给各工具的 handle。"
   []
   (let [defs (tool-loader/load-tool-definitions)
         names (set (tool-registry/registered-names))]
@@ -74,8 +75,9 @@
 
 (defn- run-tool-loop
   "带 tools 的 complete 循环：直到返回无 tool_calls 的 assistant 消息。
-   emit-fn 可选 (fn [event-type payload])，会收到 :tool-call 与 :tool-result。"
-  [client messages opts sci-ctx emit-fn]
+   emit-fn 可选 (fn [event-type payload])，会收到 :tool-call 与 :tool-result。
+   tool-ctx 为 opts 中的 :tool-ctx，原样传给各工具的 handle。"
+  [client messages opts tool-ctx emit-fn]
   (println "[agent] run-tool-loop: calling llm/complete, messages count =" (count messages))
   (let [resp (llm/complete client messages opts)]
     (println "[agent] llm/complete returned: tool_calls?" (seq (:tool_calls resp)) "content len =" (count (str (:content resp))))
@@ -89,7 +91,7 @@
                                   (let [result {:error (str "未知工具: " name)}]
                                     (when emit-fn (emit-fn :tool-result result))
                                     {:role "tool" :tool_call_id (get tc :id) :content (pr-str result)})
-                                  (let [result (tool-registry/handle tool args sci-ctx)]
+                                  (let [result (tool-registry/handle tool args tool-ctx)]
                                     (when emit-fn
                                       (emit-fn :tool-call (merge {:name name :arguments args}
                                                                  (tool-registry/call-display tool args)))
@@ -98,7 +100,7 @@
                             (:tool_calls resp))
             next-msg (into (conj messages assistant-msg) tool-msgs)]
         (println "[agent] tool loop recur, next-msg count =" (count next-msg))
-        (recur client next-msg opts sci-ctx emit-fn))
+        (recur client next-msg opts tool-ctx emit-fn))
       resp)))
 
 
@@ -113,7 +115,7 @@
          messages (-> message-or-messages normalize-messages messages-with-date-context)
          opts (or opts {})
          use-tools? (seq (:tools opts))
-         sci-ctx (:sci-ctx opts)
+         tool-ctx (:tool-ctx opts)
          model-opts (:model-opts (:gene agent))
          client (llm/make-client model-opts)]
      (if use-tools?
@@ -125,7 +127,7 @@
              (a/>!! ch [:thinking "思考中..."])
              (println "[agent] emitted :thinking")
              (let [emit-fn (fn [k v] (a/>!! ch [k v]))
-                   final (run-tool-loop client messages opts sci-ctx emit-fn)
+                   final (run-tool-loop client messages opts tool-ctx emit-fn)
                    content (or (:content final) "")]
                (println "[agent] run-tool-loop done, emitting content len =" (count content) "then :done")
                (a/>!! ch [:content content])
