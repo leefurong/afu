@@ -219,22 +219,16 @@
                      till-str   (if (str/blank? (str till-date))
                                   (row-date-str (peek items-asc) date-idx)
                                   (str till-date))
-                     ;; 最后一个 date <= till-str 的下标
+                     ;; 最后一个 date <= till-str 的下标；若该日无数据则等价于向前取最近有数据的交易日，不报错
                      i-end      (last (keep-indexed (fn [i row]
                                                       (when (<= (compare (row-date-str row date-idx) till-str) 0) i))
                                                     items-asc))
-                     actual-end (when (some? i-end) (row-date-str (nth items-asc i-end) date-idx))
-                     ;; 用户传了 till-date 但数据未覆盖到该日（如截止日在未来）→ 报错
-                     till-err   (when (and (not (str/blank? (str till-date))) (some? actual-end)
-                                           (neg? (compare actual-end till-str)))
-                                  {:error (str "截止日 " till-str " 无数据，最近交易日为 " actual-end "。")})
-                     slice-len  (when-not till-err (+ (dec ma-days) back-days))
-                     i-start   (when (and (not till-err) (some? i-end) (some? slice-len) (>= i-end (dec slice-len)))
+                     slice-len  (+ (dec ma-days) back-days)
+                     i-start   (when (and (some? i-end) (>= i-end (dec slice-len)))
                                  (max 0 (- i-end slice-len -1)))
                      slice     (when (and (some? i-start) (some? i-end))
                                  (subvec items-asc i-start (inc i-end)))]
                  (cond
-                   till-err   till-err
                    (or (nil? slice) (< (count slice) ma-days))
                    {:error (str "无法在截止日 " (or till-str till-date) " 前取到 " back-days " 天数据。")}
                    :else
