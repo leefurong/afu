@@ -1,1 +1,1 @@
-{:tools ["execute_clojure"]}
+{:tools ["execute_clojure" "tushare_daily"]}
