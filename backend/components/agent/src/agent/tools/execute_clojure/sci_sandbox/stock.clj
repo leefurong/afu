@@ -1,0 +1,143 @@
+(ns agent.tools.execute-clojure.sci-sandbox.stock
+  "SCI 沙箱内可调用的 K 线数据：get-k，基于 Tushare。"
+  (:require [agent.tools.execute-clojure.sci-sandbox.env :as env]
+            [cheshire.core :as json]
+            [clj-http.client :as client]
+            [clojure.string :as str])
+  (:import (java.time LocalDate)
+           (java.time.format DateTimeFormatter)
+           (java.time.temporal ChronoUnit)))
+
+(def ^:private api-url "http://api.tushare.pro")
+(def ^:private timeout-ms 15000)
+(def ^:private basic-iso DateTimeFormatter/BASIC_ISO_DATE)
+
+(defn- parse-ymd
+  "将 YYYYMMDD 字符串转为 LocalDate。"
+  [s]
+  (when (and (string? s) (= 8 (count s)))
+    (try
+      (LocalDate/parse s basic-iso)
+      (catch Exception _ nil))))
+
+(defn- date->str
+  [^LocalDate d]
+  (.format d basic-iso))
+
+(defn- plus-days
+  [^LocalDate d n]
+  (.plus d n ChronoUnit/DAYS))
+
+(defn- next-weekday
+  "若 d 为周六/周日则顺延到下一周一；否则返回 d。"
+  [^LocalDate d]
+  (case (.getValue (.getDayOfWeek d))
+    6 (plus-days d 2)   ;; Saturday -> Monday
+    7 (plus-days d 1)   ;; Sunday -> Monday
+    d))
+
+(defn- start-date-from-beg
+  "起始日：beg-date 若为周末则顺延到下一交易日（周一）。"
+  [beg-date]
+  (when-let [d (parse-ymd beg-date)]
+    (date->str (next-weekday d))))
+
+(defn- end-date-from-beg-and-count
+  "根据起始日与需要的 K 线条数计算 end_date，保证区间内至少有 count 根 K 线。"
+  [beg-date count dwmsy]
+  (when-let [start-d (parse-ymd beg-date)]
+    (let [start-d (next-weekday start-d)
+          days    (case dwmsy
+                    "日k" (* count 2)   ;; 约 count 个交易日
+                    "周k" (* count 7)
+                    "月k" (* (max 1 count) 31)
+                    31)]
+      (date->str (plus-days start-d (max 1 days))))))
+
+(defn- dwmsy->api
+  "K 线类型 -> [api_name, params 中的 freq]。日k 用 daily 无 freq；周/月用 stk_weekly_monthly。"
+  [dwmsy]
+  (case dwmsy
+    "日k" [:daily nil]
+    "周k" [:stk_weekly_monthly "week"]
+    "月k" [:stk_weekly_monthly "month"]
+    "季k" [:unsupported nil]
+    "年k" [:unsupported nil]
+    nil))
+
+(defn- normalize-ts-code
+  "若用户只传 000001，补全为 000001.SZ（深市）或 000001.SH（沪市）。简单规则：6 开头为沪，否则为深。"
+  [s]
+  (cond
+    (str/blank? s) s
+    (str/includes? (str s) ".") (str s)
+    (str/starts-with? (str s) "6") (str s ".SH")
+    :else (str s ".SZ")))
+
+(defn- request-tushare
+  [token api-name params]
+  (let [body (json/generate-string {:api_name api-name
+                                    :token    token
+                                    :params   params})]
+    (try
+      (let [resp (client/post api-url
+                             {:body            body
+                              :content-type    :json
+                              :accept          :json
+                              :socket-timeout  timeout-ms
+                              :conn-timeout    timeout-ms})
+            data (json/parse-string (:body resp) true)]
+        (if (contains? data :code)
+          (let [code (long (:code data))]
+            (if (zero? code)
+              (let [inner (or (:data data) data)
+                    payload (-> (select-keys inner [:fields :items])
+                                (update-vals #(or % [])))
+                    items (:items payload)]
+                {:ok (assoc payload :items (or items []))})
+              {:error (str "Tushare 返回错误: " (or (:msg data) "未知") " (code=" code ")")}))
+          {:error "Tushare 返回格式异常"}))
+      (catch Exception e
+        {:error (str "请求 Tushare 失败: " (.getMessage e))}))))
+
+(defn get-k
+  "获取 K 线数据。
+   参数:
+   - stock-code: 股票代码，如 \"000001\" 或 \"000001.SZ\"
+   - dwmsy: K 线类型，\"日k\" \"周k\" \"月k\" \"季k\" \"年k\"（季k/年k 暂不支持）
+   - beg-date: 起始日期，格式 YYYYMMDD；若该日未开盘（如周末）则顺延到下一交易日
+   - count: 需要的 K 线条数，可选，默认 20；end_date 据此自动计算
+   返回 {:ok {:fields [...] :items [[...] ...]}} 或 {:error \"...\"}，items 最多 count 条（从起始日起）。"
+  ([stock-code dwmsy beg-date]
+   (get-k stock-code dwmsy beg-date 20))
+  ([stock-code dwmsy beg-date count]
+   (let [count (if (or (nil? count) (neg? (long count))) 20 (long count))
+         token (env/get-env "TUSHARE_API_TOKEN")]
+     (if (str/blank? token)
+       {:error "未配置 TUSHARE_API_TOKEN，请在环境中设置"}
+       (let [[api-name freq] (dwmsy->api dwmsy)]
+         (cond
+           (= api-name :unsupported)
+           {:error "暂不支持季k/年k，请使用 日k、周k 或 月k。"}
+
+           (not (parse-ymd beg-date))
+           {:error "起始日期格式须为 YYYYMMDD，例如 20250101。"}
+
+           :else
+           (let [ts-code   (normalize-ts-code (str stock-code))
+                 start-d   (start-date-from-beg beg-date)
+                 end-d     (end-date-from-beg-and-count beg-date count dwmsy)
+                 params    (cond-> {:ts_code    ts-code
+                                   :start_date start-d
+                                   :end_date   end-d}
+                            freq (assoc :freq freq))
+                 result    (request-tushare token (name api-name) params)]
+             (if (:error result)
+               result
+               (update result :ok
+                       (fn [payload]
+                         ;; Tushare 返回按日期降序；取「从起始日起」的 count 条，仍按日期降序返回
+                         (update payload :items
+                                 (fn [items]
+                                   (let [items (or items [])]
+                                     (reverse (take count (reverse items))))))))))))))))

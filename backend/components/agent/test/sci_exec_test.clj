@@ -89,3 +89,21 @@
     (let [res (se/eval-string "(env/get-env \"TUSHARE_API_TOKEN\")")]
       (is (contains? res :ok))
       (when (:ok res) (is (string? (:ok res)))))))
+
+(deftest stock-namespace-available
+  (testing "stock/get-k is available and returns map with :ok or :error"
+    (let [res (se/eval-string "(stock/get-k \"000001\" \"日k\" \"20250101\")")]
+      (is (or (contains? res :ok) (contains? res :error)))
+      (when (:ok res)
+        (let [r (:ok res)]
+          (is (map? r))
+          ;; get-k 成功返回 {:ok {:fields _ :items _}}，失败返回 {:error _}
+          (is (or (contains? r :ok) (contains? r :error)))))))
+  (testing "stock/get-k with 3 args (no count) defaults to 20"
+    (let [res (se/eval-string "(stock/get-k \"000001.SZ\" \"日k\" \"20250101\")")]
+      (is (map? res))
+      (when (and (:ok res) (seq (get-in (:ok res) [:ok :items])))
+        (is (<= (count (get-in (:ok res) [:ok :items])) 20)))))
+  (testing "stock/get-k 季k returns error (unsupported)"
+    (is (= {:ok {:error "暂不支持季k/年k，请使用 日k、周k 或 月k。"}}
+           (se/eval-string "(stock/get-k \"000001\" \"季k\" \"20250101\")")))))

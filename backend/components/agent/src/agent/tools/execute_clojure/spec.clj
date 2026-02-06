@@ -19,11 +19,11 @@
                        "2) 沙箱内置的 http 命名空间：(http/get \"url\")、(http/post \"url\" {:body \"...\" :headers {...}})，返回 {:status N :headers {...} :body \"...\"} 或 {:error \"...\"}；\n"
                        "3) json：(json/parse-string \"...\")、(json/write-str {...})；\n"
                        "4) env：(env/get-env \"VAR_NAME\") 读取环境变量，仅可读取以下环境变量：" wl "，其他名称返回 nil；\n"
-                       "5) 如需访问外部数据， 请阅读这块补充说明（结合上述 http + json + env 使用）：\n"
-                       "   · 股票数据：如果使用Tushare, 需 env TUSHARE_API_TOKEN。POST http://api.tushare.pro，body 为 JSON（api_name、token、params），返回用 json/parse-string 解析。\n\n"
+                       "5) stock：K 线数据 (stock/get-k stock-code dwmsy beg-date count)。stock-code 股票代码如 \"000001\" 或 \"000001.SZ\"；dwmsy 为 \"日k\" \"周k\" \"月k\"（季k/年k 暂不支持）；beg-date 为 YYYYMMDD；count 可选、默认 20。返回 {:ok {:fields _ :items _}} 或 {:error _}。\n"
+                       "6) 如需其他外部数据，可用 http + json + env：例如 Tushare 可 POST http://api.tushare.pro，body 为 JSON（api_name、token、params），返回用 json/parse-string 解析。\n\n"
                        "禁止：require/import、Java 互操作、eval/load-file/slurp/spit/read-string 等。\n\n"
                        "入参为 code（字符串）。返回 {:ok 结果} 或 {:error 错误信息}，可能带 :out。")
      :parameters {:type "object"
                   :properties {:code {:type "string"
-                                     :description (str "要执行的 Clojure (SCI) 代码。仅限 SCI 子集：clojure.core 常用函数 + http/json/env，不可 require、不可 Java 互操作。环境变量名仅限：" wl "。")}}
+                                     :description (str "要执行的 Clojure (SCI) 代码。仅限 SCI 子集：clojure.core 常用函数 + http/json/env/stock，不可 require、不可 Java 互操作。环境变量名仅限：" wl "。")}}
                   :required ["code"]}}))
