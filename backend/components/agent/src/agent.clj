@@ -132,7 +132,14 @@
                (a/>!! ch [:done agent]))
              (catch Exception e
                (println "[agent] exception in tool loop:" (.getMessage e))
-               (a/>!! ch [:done agent]))
+               (let [err-msg (if (ex-data e)
+                              (let [status (:status (ex-data e))]
+                                (if (= 429 status)
+                                  "大模型请求过于频繁(429)，请稍后再试。"
+                                  (str "大模型请求失败(status=" status ")，请稍后再试。")))
+                             (str "处理失败: " (.getMessage e)))]
+                 (a/>!! ch [:content err-msg])
+                 (a/>!! ch [:done agent])))
              (finally
                (a/close! ch)))))
        (a/go
@@ -144,8 +151,15 @@
                  (a/>! ch [:content delta])
                  (recur)))
              (a/>! ch [:done agent]))
-           (catch Exception _e
-             (a/>! ch [:done agent]))
+           (catch Exception e
+             (let [err-msg (if (ex-data e)
+                            (let [status (:status (ex-data e))]
+                              (if (= 429 status)
+                                "大模型请求过于频繁(429)，请稍后再试。"
+                                (str "大模型请求失败(status=" status ")，请稍后再试。")))
+                           (str "处理失败: " (.getMessage e)))]
+               (a/>! ch [:content err-msg])
+               (a/>! ch [:done agent])))
            (finally
              (a/close! ch)))))
      ch))) 
