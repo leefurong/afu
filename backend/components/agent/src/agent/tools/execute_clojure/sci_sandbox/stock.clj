@@ -176,8 +176,9 @@
    - stock-code: 股票代码，如 \"000001\" 或 \"000001.SZ\"
    - days: MA 周期，如 5、10、20、60
    可选:
-   - beg-date: 起始日期 YYYYMMDD，默认约一年前
-   - count: 取 K 线数量，默认 250
+   - beg-date: 起始日期 YYYYMMDD；不设则默认约一年前（得到「最近」的 MA，最后一行为最近交易日）
+   - bar-count: 取 K 线数量，默认 250；不设则取满
+   用法举例：今天的 MA5 → (ma \"000001\" 5)；昨天的 → (ma \"000001\" 5 \"昨天YYYYMMDD\")；今天+昨天两条 → (ma \"000001\" 5 \"昨天YYYYMMDD\" 2)。
    返回 {:ok {:fields [\"trade_date\" \"close\" \"maN\"] :items [[date close ma] ...]}} 或 {:error \"...\"}，
    items 按日期升序，前 (days-1) 条无 MA 值（nil）。"
   ([stock-code days]
@@ -185,6 +186,8 @@
          beg   (date->str (next-weekday (minus-days today 365)))
          cnt   (max 250 (+ (long days) 50))]
      (ma stock-code days beg cnt)))
+  ([stock-code days beg-date]
+   (ma stock-code days beg-date nil))
   ([stock-code days beg-date bar-count]
    (let [days  (long days)
          cnt   (if (or (nil? bar-count) (neg? (long bar-count))) 250 (long bar-count))
