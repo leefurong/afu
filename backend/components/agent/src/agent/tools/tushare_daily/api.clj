@@ -4,7 +4,8 @@
             [clj-http.client :as client]
             [clojure.string :as str]))
 
-(def ^:private api-url "https://open.tushare.pro/api")
+;; 官方接口: http://api.tushare.pro （勿用 open.tushare.pro，该域名无法解析）
+(def ^:private api-url "http://api.tushare.pro")
 (def ^:private timeout-ms 15000)
 
 (defn- build-params
