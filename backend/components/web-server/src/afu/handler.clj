@@ -4,7 +4,6 @@
             [ring.middleware.cors :as cors]
             [ring.util.io :as ring-io]
             [clojure.core.async :as a]
-            [clojure.string :as str]
             [cheshire.core :as json]
             [agent :as agent]
             [agentmanager :as agentmanager]
@@ -97,19 +96,9 @@
         (.flush out)
         (recur)))))
 
-(defn- tool-pair->visible-text
-  "把一条 tool_call+tool_result 格式化成模型可读的纯文本（role: tool 对模型不可见，需用 user 文本喂给模型）。"
-  [{:keys [tool-call tool-result]}]
-  (let [name (get tool-call :name "unknown")
-        input (get tool-call :content "")
-        result-content (get tool-result :content "")]
-    (str "[Tool] " name "\n"
-         "Input: " input "\n"
-         "Result: " result-content)))
-
 (defn- history->api-messages
   "把 DB 里存的会话历史（含 tool_call/tool_result）转成 LLM API 可接受的 messages，保持真实顺序。
-   规则：user/system/assistant 原样；连续 tool_call+tool_result 对 → 一条 assistant（带 tool_calls）+ 一条合成 user（工具结果纯文本），不传 role: tool（模型不可见且冗余）。"
+   规则：user/system/assistant 原样；连续 tool_call+tool_result 对 → 一条 assistant（带 tool_calls）+ 若干 role=tool（API 要求，否则 400）。"
   [history]
   (when (seq history)
     (loop [acc [] i 0]
@@ -150,14 +139,15 @@
                                             :function {:name name
                                                        :arguments (json/generate-string {:code code})}}))
                                        (range (count pairs-vec)) pairs-vec)
+                      tool-msgs (mapv (fn [idx pair]
+                                        {:role "tool"
+                                         :tool_call_id (str "hist-" idx)
+                                         :content (get-in pair [:tool-result :content] "")})
+                                      (range (count pairs-vec)) pairs-vec)
                       assistant-msg {:role "assistant"
                                      :content ""
-                                     :tool_calls tool-calls}
-                      ;; 合成 user：工具结果以纯文本喂给模型（不再传 role: tool，模型本就不可见）
-                      synthetic-user {:role "user"
-                                      :content (str "（上轮工具调用结果，供模型参考）\n"
-                                                   (str/join "\n\n" (map tool-pair->visible-text pairs-vec)))}]
-                  (recur (into acc [assistant-msg synthetic-user]) j))
+                                     :tool_calls tool-calls}]
+                  (recur (into acc (into [assistant-msg] tool-msgs)) j))
                 (recur acc (inc i))))
 
             ;; 未知 role 或 tool_result 单独出现（不应发生）则跳过
