@@ -123,22 +123,22 @@
             items   (get payload :items)]
         (when (and payload (seq items))
           (let [last-row (peek items)]
-            (is (= 3 (count last-row)) "last row is [trade_date close ma]")
-            (is (number? (nth last-row 2)) "last row ma is today's MA5 (numeric)"))))))
+            (is (map? last-row))
+            (is (number? (:ma5 last-row)) "last row :ma5 is today's MA5 (numeric)"))))))
 
-  ;; 2) 昨天的 MA5：days=5，beg-date=昨天，bar-count 不设 → 第一行日期为从 beg-date 起的交易日，即「从昨天起」的数据
-  (testing "yesterday's: (ma stock-code 5 beg-date) — beg-date set, no bar-count; first row is start date (or next weekday), many rows"
+  ;; 2) 从 beg-date 起 1 天 MA（默认 num-days=1）
+  (testing "ma with beg-date only: (ma stock-code 5 beg-date) — default num-days=1; exactly 1 row from beg-date"
     (let [res (se/eval-string "(stock/ma \"000001\" 5 \"20250101\")")]
       (is (contains? res :ok))
       (let [payload (get-in res [:ok :ok])
             items   (get payload :items)]
         (when (and payload (seq items))
-          (let [first-date (nth (first items) 0)]
-            (is (= 8 (count (str first-date))) "first row date is YYYYMMDD")
-            (is (>= (count items) 5) "enough rows for MA5"))))))
+          (let [first-date (:trade_date (first items))]
+            (is (= 8 (count (str first-date))) "first row :trade_date is YYYYMMDD")
+            (is (= 1 (count items)) "default num-days=1 => 1 row"))))))
 
-  ;; 3) 今天和昨天两条：days=5，beg-date=昨天，bar-count=2 → 仅 2 行，第一行昨天、第二行今天
-  (testing "today and yesterday: (ma stock-code 5 beg-date 2) — beg-date + bar-count=2; exactly 2 rows"
+  ;; 3) 从 beg-date 起 2 天 MA：num-days=2 → 仅 2 行
+  (testing "2 days of MA from beg-date: (ma stock-code 5 beg-date 2) — num-days=2; exactly 2 rows"
     (let [res (se/eval-string "(stock/ma \"000001\" 5 \"20250101\" 2)")]
       (is (contains? res :ok))
       (let [payload (get-in res [:ok :ok])

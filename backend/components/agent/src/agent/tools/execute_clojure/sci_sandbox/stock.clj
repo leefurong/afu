@@ -170,92 +170,122 @@
                 (/ s d))))
           (range n))))
 
+(defn- row-date-str
+  "取 row 的 trade_date 并转为可比较的 YYYYMMDD 字符串。"
+  [row date-idx]
+  (str (nth row date-idx nil)))
+
 (defn ma
   "计算日 K 收盘价的 N 日简单移动平均。
-   参数:
-   - stock-code: 股票代码，如 \"000001\" 或 \"000001.SZ\"
-   - days: MA 周期，如 5、10、20、60
-   可选:
-   - beg-date: 起始日期 YYYYMMDD；不设则默认约一年前（得到「最近」的 MA，最后一行为最近交易日）
-   - bar-count: 取 K 线数量，默认 250；不设则取满
-   用法举例：今天的 MA5 → (ma \"000001\" 5)；昨天的 → (ma \"000001\" 5 \"昨天YYYYMMDD\")；今天+昨天两条 → (ma \"000001\" 5 \"昨天YYYYMMDD\" 2)。
-   返回 {:ok {:fields [\"trade_date\" \"close\" \"maN\"] :items [[date close ma] ...]}} 或 {:error \"...\"}，
-   items 按日期升序，前 (days-1) 条无 MA 值（nil）。"
+   - stock-code: 股票代码；days: MA 周期（如 5、10、20、60）。
+   - beg-date: 「从哪一天开始的 MA」YYYYMMDD；要算这一天的 MA 会先倒推拉取足够 K 线。
+   - num-days: beg-date 之后要多少天的 MA 数据（输出行数），默认 1。
+   用法：今天 MA5 → (ma \"000001\" 5)；从某日起 5 天 MA → (ma \"000001\" 5 \"20260206\" 5)。
+   返回 {:ok {:fields [...] :items [[date close ma] ...]}} 按日期升序。"
   ([stock-code days]
    (let [today (LocalDate/now)
          beg   (date->str (next-weekday (minus-days today 365)))
-         cnt   (max 250 (+ (long days) 50))]
-     (ma stock-code days beg cnt)))
+         num   1]
+     (ma stock-code days beg num)))
   ([stock-code days beg-date]
-   (ma stock-code days beg-date nil))
-  ([stock-code days beg-date bar-count]
-   (let [days  (long days)
-         cnt   (if (or (nil? bar-count) (neg? (long bar-count))) 250 (long bar-count))
-         k     (get-k (str stock-code) "日k" beg-date cnt)]
+   (ma stock-code days beg-date 1))
+  ([stock-code days beg-date num-days]
+   (let [ma-days   (long days)
+         num-days  (if (or (nil? num-days) (neg? (long num-days))) 1 (long num-days))]
      (cond
-       (:error k) k
        (not (parse-ymd beg-date)) {:error "起始日期格式须为 YYYYMMDD。"}
-       (< days 2) {:error "MA 周期 days 至少为 2。"}
+       (< ma-days 2)              {:error "MA 周期 days 至少为 2。"}
        :else
-       (let [payload (:ok k)
-             fields  (:fields payload)
-             items   (or (:items payload) [])
-             date-idx (field-index fields "trade_date")
-             close-idx (field-index fields "close")]
-         (if (or (nil? date-idx) (nil? close-idx))
-           {:error "K 线数据缺少 trade_date 或 close 字段"}
-           (let [closes (mapv (fn [row]
-                               (parse-close (nth row close-idx nil)))
-                             items)
-                 ma-key (str "ma" days)
-                 ma-vals (simple-moving-average closes days)
-                 result-items (mapv (fn [i row]
-                                      (let [d (nth row date-idx)
-                                            c (nth closes i)
-                                            m (nth ma-vals i)]
-                                        [d c m]))
-                                    (range (count items))
-                                    items)]
-             {:ok {:fields ["trade_date" "close" ma-key]
-                   :items  result-items}})))))))
+       ;; 要算 beg-date 起 num-days 天的 MA，需要 (ma-days-1) 根前置 K + num-days 根；倒推 K 线起始日并请求足够根数使区间覆盖到 beg-date
+       (let [k-need      (+ (dec ma-days) num-days)
+             k-buffer    80
+             cal-days    (* 2 (+ k-need k-buffer))  ;; 倒推的自然日数
+             ;; 约 1.5 自然日/根 K，要覆盖 cal-days 需 (cal-days/1.5) 根，多要一些确保覆盖到 beg-date
+             k-request   (max 320 (long (Math/ceil (+ (/ cal-days 1.2) k-need))))
+             start-d     (when-let [d (parse-ymd beg-date)]
+                           (date->str (minus-days (next-weekday d) cal-days)))
+             k           (get-k (str stock-code) "日k" start-d k-request)]
+         (cond
+           (:error k) k
+           (nil? start-d) {:error "起始日期格式须为 YYYYMMDD。"}
+           :else
+           (let [payload   (:ok k)
+                 fields    (:fields payload)
+                 items-raw (or (:items payload) [])
+                 ;; get-k 返回按日期降序，先反转为升序便于按 beg-date 截取
+                 items-asc (vec (reverse items-raw))
+                 date-idx  (field-index fields "trade_date")
+                 close-idx (field-index fields "close")]
+             (if (or (nil? date-idx) (nil? close-idx))
+               {:error "K 线数据缺少 trade_date 或 close 字段"}
+               (let [beg-str (str beg-date)
+                     ;; 第一个 >= beg-date 的下标
+                     i0     (first (keep-indexed (fn [i row]
+                                                   (when (>= (compare (row-date-str row date-idx) beg-str) 0) i))
+                                                 items-asc))
+                     i-start (when (and i0 (>= i0 (dec ma-days)))
+                               (max 0 (- i0 (dec ma-days))))
+                     i-end   (when i-start (+ i-start (dec ma-days) num-days))
+                     slice   (when (and i-start i-end (<= i-end (count items-asc)))
+                               (subvec items-asc i-start i-end))]
+                 (if (or (nil? slice) (< (count slice) ma-days))
+                   {:error (str "无法在给定区间内得到从 " beg-date " 起的 " num-days " 天数据，请检查日期或稍扩大范围。")}
+                   (let [closes    (mapv (fn [row] (parse-close (nth row close-idx nil))) slice)
+                         ma-vals   (simple-moving-average closes ma-days)
+                         ma-key    (str "ma" ma-days)
+                         ;; slice 前 (ma-days-1) 行为前置 K，从第 ma-days 行起为 beg-date 及之后
+                         out-start (dec ma-days)
+                         ma-kw    (keyword (str "ma" ma-days))
+                         out-items (mapv (fn [i]
+                                           (let [row (nth slice i)
+                                                 d   (nth row date-idx)
+                                                 c   (nth closes i)
+                                                 m   (nth ma-vals i)]
+                                             {:trade_date (str d) :close c ma-kw m}))
+                                         (vec (range out-start (+ out-start num-days))))]
+                     {:ok {:items out-items}})))))))))))
 
 (defn golden-cross
   "检测短期均线上穿长期均线（金叉）。内部调用两次 ma，对齐后找 short_ma 由 <= long_ma 变为 > long_ma 的时点。
-   参数: stock-code, short-days, long-days；可选 beg-date、bar-count（与 ma 一致，两次 ma 用同一参数）。
+   参数: stock-code, short-days, long-days；  可选 beg-date、num-days（与 ma 一致：从 beg-date 起多少天 MA 数据）。
    返回 {:ok {:crosses [{:date \"YYYYMMDD\" :short_ma x :long_ma y} ...]}} 或 {:error _}，crosses 按日期升序。"
   ([stock-code short-days long-days]
    (let [today (LocalDate/now)
          beg   (date->str (next-weekday (minus-days today 365)))
-         cnt   (max 250 (+ (long (max short-days long-days)) 50))]
-     (golden-cross stock-code short-days long-days beg cnt)))
+         num   250]
+     (golden-cross stock-code short-days long-days beg num)))
   ([stock-code short-days long-days beg-date]
-   (golden-cross stock-code short-days long-days beg-date nil))
-  ([stock-code short-days long-days beg-date bar-count]
-   (let [ma-short (ma (str stock-code) (long short-days) beg-date bar-count)
-         ma-long  (ma (str stock-code) (long long-days) beg-date bar-count)]
-     (cond
-       (:error ma-short) ma-short
-       (:error ma-long)  ma-long
-       (< (long short-days) 2) {:error "短期 MA 周期至少为 2。"}
-       (< (long long-days) 2) {:error "长期 MA 周期至少为 2。"}
-       (>= (long short-days) (long long-days)) {:error "短期周期应小于长期周期（如 5 与 20）。"}
-       :else
-       (let [short-items (get-in ma-short [:ok :items])
-             long-items  (get-in ma-long [:ok :items])
-             n           (min (count short-items) (count long-items))]
-         (if (< n 2)
-           {:ok {:crosses []}}
-           (let [crosses (into []
-                               (comp
-                                (map (fn [i]
-                                       (let [s0 (nth (nth short-items (dec i)) 2)
-                                             l0 (nth (nth long-items (dec i)) 2)
-                                             s1 (nth (nth short-items i) 2)
-                                             l1 (nth (nth long-items i) 2)
-                                             d  (nth (nth short-items i) 0)]
-                                         (when (and (number? s0) (number? l0) (number? s1) (number? l1)
-                                                    (<= s0 l0) (> s1 l1))
-                                           {:date d :short_ma s1 :long_ma l1}))))
-                                (filter some?))
-                               (range 1 n))]
-             {:ok {:crosses crosses}})))))))
+   (golden-cross stock-code short-days long-days beg-date 250))
+  ([stock-code short-days long-days beg-date num-days]
+   (cond
+     (< (long short-days) 2) {:error "短期 MA 周期至少为 2。"}
+     (< (long long-days) 2) {:error "长期 MA 周期至少为 2。"}
+     (>= (long short-days) (long long-days)) {:error "短期周期应小于长期周期（如 5 与 20）。"}
+     :else
+     (let [ma-short (ma (str stock-code) (long short-days) beg-date num-days)
+           ma-long  (ma (str stock-code) (long long-days) beg-date num-days)]
+       (cond
+         (:error ma-short) ma-short
+         (:error ma-long)  ma-long
+         :else
+         (let [short-items (get-in ma-short [:ok :items])
+               long-items  (get-in ma-long [:ok :items])
+               skw        (keyword (str "ma" short-days))
+               lkw        (keyword (str "ma" long-days))
+               n          (min (count short-items) (count long-items))]
+           (if (< n 2)
+             {:ok {:crosses []}}
+             (let [crosses (into []
+                                 (comp
+                                  (map (fn [i]
+                                         (let [prev-s (get (nth short-items (dec i)) skw)
+                                               prev-l (get (nth long-items (dec i)) lkw)
+                                               curr-s (get (nth short-items i) skw)
+                                               curr-l (get (nth long-items i) lkw)
+                                               d      (:trade_date (nth short-items i))]
+                                           (when (and (number? prev-s) (number? prev-l) (number? curr-s) (number? curr-l)
+                                                      (<= prev-s prev-l) (> curr-s curr-l))
+                                             {:date d :short_ma curr-s :long_ma curr-l}))))
+                                  (filter some?))
+                                 (range 1 n))]
+               {:ok {:crosses crosses}}))))))))
