@@ -46,15 +46,40 @@
           []))
       [])))
 
+;; Datomic segment/memcached limit ~1MB; keep messages-edn under this to avoid "Item too large"
+(def ^:private max-messages-edn-bytes (int 512000))
+
+(defn- truncate-content [s max-len]
+  (if (and (string? s) (> (count s) max-len))
+    (str (subs s 0 max-len) "... [truncated]")
+    s))
+
+(defn- cap-message-content [msg max-content-len]
+  (if (string? (:content msg))
+    (update msg :content #(truncate-content % max-content-len))
+    msg))
+
+(def ^:private max-single-content-chars (int 100000))
+
+(defn- trim-messages-to-size
+  "Drop oldest messages until pr-str of messages is under max-bytes.
+   Each message :content is capped to max-single-content-chars so one huge message doesn't force dropping all."
+  [messages max-bytes]
+  (let [capped (mapv #(cap-message-content % max-single-content-chars) messages)]
+    (if (<= (count (pr-str capped)) max-bytes)
+      capped
+      (recur (subvec capped 1) max-bytes))))
+
 (defn append-messages!
-  "向会话追加若干条消息（末尾追加），每条为 {:role \"user\"|\"assistant\"|\"system\" :content \"...\"}。"
+  "向会话追加若干条消息（末尾追加），每条为 {:role \"user\"|\"assistant\"|\"system\" :content \"...\"}。
+   若合并后 EDN 超过 max-messages-edn-bytes，会丢弃最旧的消息以避免 Datomic \"Item too large\"。"
   [conn conversation-id new-messages]
   (when (seq new-messages)
-    (let [db (d/db conn)
-          current (get-messages conn conversation-id)
+    (let [current (get-messages conn conversation-id)
           updated (into (vec current) new-messages)
+          trimmed (trim-messages-to-size updated max-messages-edn-bytes)
           updated-at (java.util.Date.)]
       (d/transact conn
                   {:tx-data [{:conversation/id conversation-id
-                              :conversation/messages-edn (pr-str updated)
+                              :conversation/messages-edn (pr-str trimmed)
                               :conversation/updated-at updated-at}]}))))

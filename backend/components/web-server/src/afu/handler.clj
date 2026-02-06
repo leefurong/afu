@@ -84,13 +84,15 @@
                        (.append content-acc v))
             :tool-call (swap! tool-steps conj {:role "tool_call" :name (:name v) :content (str (:code v))})
             :tool-result (swap! tool-steps conj {:role "tool_result" :content (pr-str v)})
-            :done (do
+            :done (try
                     (when (and conn conversation-id (seq user-text))
                       (conversation/append-messages! conn conversation-id
                         (into [{:role "user" :content user-text}]
                               (conj (vec @tool-steps) {:role "assistant" :content (str content-acc)}))))
                     (when (and conn v (some? (:agent-id v)))
-                      (agentmanager/save-agent! conn v))))
+                      (agentmanager/save-agent! conn v))
+                    (catch Throwable t
+                      (println "[chat] :done persist failed (e.g. Item too large):" (.getMessage t)))))
           nil)
         (.write out (.getBytes (str (event->ndjson-line ev conversation-id) "\n") "UTF-8"))
         (.flush out)
