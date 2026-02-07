@@ -154,22 +154,41 @@
   [conn message-id]
   (change-next! conn 1 message-id))
 
+(defn- can-left-right-for-message
+  "某条消息若有多个后继，按 selected-next-id 在有序后继中的位置：最左则不能左，最右则不能右。"
+  [db mid]
+  (let [m (pull-message db mid)
+        next-ids (vec (or (:message/next-ids m) []))]
+    (if (<= (count next-ids) 1)
+      {:can-left? false :can-right? false}
+      (let [id->at (into {} (map (fn [id] [id (get (pull-message db id) :message/created-at)]) next-ids))
+            ordered (vec (sort-by (fn [id] [(or (get id->at id) (java.util.Date. 0)) (str id)]) next-ids))
+            cur (or (:message/selected-next-id m) (first ordered))
+            idx (first (keep-indexed (fn [i e] (when (= e cur) i)) ordered))]
+        (if (integer? idx)
+          {:can-left? (> idx 0) :can-right? (< idx (dec (count ordered)))}
+          {:can-left? false :can-right? false})))))
+
 (defn get-messages
   "从指定头节点沿 prev-id 向前遍历，得到该分支消息列表（ Chronological 顺序）。
    head-message-id 为 nil 时使用主分支 head；会话不存在或无消息时返回 []。
-   每条为 message/data 解析后的 map（含 :role :content 等）。"
+   每条为 map，含 :id、:can-left? / :can-right?（该条若有多个后继，当前选中是否可再点左/右），以及 data 中所有键。"
   ([conn conversation-id]
    (get-messages conn conversation-id (get-head conn conversation-id)))
   ([conn conversation-id head-message-id]
    (if (or (nil? conversation-id) (nil? head-message-id))
      []
-     (let [db (d/db conn)]
-       (loop [acc [], mid head-message-id]
-         (if-let [m (pull-message db mid)]
-           (let [data (try (edn/read-string (or (:message/data m) "{}"))
-                           (catch Exception _ {}))]
-             (recur (conj acc data) (:message/prev-id m)))
-           (reverse acc)))))))
+     (let [db (d/db conn)
+           raw (loop [acc [], mid head-message-id]
+                 (if-let [m (pull-message db mid)]
+                   (let [data (try (edn/read-string (or (:message/data m) "{}"))
+                                   (catch Exception _ {}))]
+                     (recur (conj acc {:id mid :data data}) (:message/prev-id m)))
+                   (reverse acc)))]
+       (mapv (fn [{:keys [id data]}]
+               (let [{:keys [can-left? can-right?]} (can-left-right-for-message db id)]
+                 (assoc data :id id :can-left? can-left? :can-right? can-right?)))
+             raw)))))
 
 (defn append-messages!
   "在 prev-message-id 之后追加一串消息，形成一条新链；并可选更新主分支 head。

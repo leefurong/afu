@@ -46,12 +46,14 @@
     (is (= [] (conv/get-messages *conn* (random-uuid))))))
 
 (deftest append-messages!
-  (testing "append-messages! 追加后 get-messages 能取到"
+  (testing "append-messages! 追加后 get-messages 能取到（含 :id :can-left? :can-right?）"
     (let [id (conv/create! *conn*)
           user-msg {:role "user" :content "你好"}
           assistant-msg {:role "assistant" :content "你好，有什么可以帮你？"}]
       (conv/append-messages! *conn* id [user-msg assistant-msg])
-      (is (= [user-msg assistant-msg] (conv/get-messages *conn* id))))))
+      (let [msgs (conv/get-messages *conn* id)]
+        (is (= [user-msg assistant-msg] (mapv #(select-keys % [:role :content]) msgs)))
+        (is (every? #(and (contains? % :id) (contains? % :can-left?) (contains? % :can-right?)) msgs))))))
 
 (deftest append-messages!-accumulates
   (testing "多次 append 按顺序累积"
@@ -62,14 +64,14 @@
               {:role "assistant" :content "a"}
               {:role "user" :content "2"}
               {:role "assistant" :content "b"}]
-             (conv/get-messages *conn* id))))))
+             (mapv #(select-keys % [:role :content]) (conv/get-messages *conn* id)))))))
 
 (deftest append-messages!-empty-no-op
   (testing "空列表 append 不报错、不改变内容"
     (let [id (conv/create! *conn*)]
       (conv/append-messages! *conn* id [{:role "user" :content "x"}])
       (conv/append-messages! *conn* id [])
-      (is (= [{:role "user" :content "x"}] (conv/get-messages *conn* id))))))
+      (is (= [{:role "user" :content "x"}] (mapv #(select-keys % [:role :content]) (conv/get-messages *conn* id)))))))
 
 (deftest fork-append-after-prev
   (testing "在 prev 后追加且 update-main-head? false 时，主分支 head 不变（fork 语义）"
@@ -112,6 +114,21 @@
       (conv/append-messages! *conn* id [{:role "user" :content "2"} {:role "assistant" :content "b"}])
       (let [h (conv/get-head *conn* id)]
         (is (= h (conv/compute-head-from *conn* h)) "续写后从 head 算仍为自身")))))
+
+(deftest get-messages-includes-id-and-can-left-right
+  (testing "get-messages 每条含 :id :can-left? :can-right?；有多个后继的那条上 can-left? 或 can-right? 依当前选中是否最左/最右"
+    (let [id (conv/create! *conn*)]
+      (conv/append-messages! *conn* id [{:role "user" :content "1"} {:role "assistant" :content "a"}])
+      (let [a-id (conv/get-head *conn* id)]
+        (conv/append-messages! *conn* id [{:role "user" :content "2"} {:role "assistant" :content "b"}])
+        (conv/append-messages! *conn* id [{:role "user" :content "fork"} {:role "assistant" :content "fr"}] a-id false)
+        (let [main-msgs (conv/get-messages *conn* id)
+              fork-head (conv/compute-head-from *conn* a-id)
+              fork-msgs (conv/get-messages *conn* id fork-head)]
+          (is (every? #(contains? % :id) main-msgs))
+          ;; 只有「有多个后继」的那条（a）会有 can-left?/can-right? 为 true；当前选中 fork 时该条 can-left? true
+          (is (true? (some :can-left? fork-msgs)) "有 fork 的那条上 can-left? 为 true（当前选中最右，可向左）")
+          (is (or (some :can-left? main-msgs) (some :can-right? main-msgs)) "主分支上有一条可左或可右"))))))
 
 (deftest left!-and-right!
   (testing "fork 后 left! / right! 切换选中的后继，返回新选中的 id；无左/右时返回 nil"
