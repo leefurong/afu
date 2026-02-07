@@ -512,35 +512,37 @@ export default function ChatPage() {
                           ))}
                         </div>
                       )}
-                    <div
-                      className={cn(
-                        "flex w-full min-w-0",
-                        message.role === "user"
-                          ? "justify-end"
-                          : "justify-start"
-                      )}
-                    >
+                    {(message.role === "user" || getMessageText(message) !== "") && (
                       <div
                         className={cn(
-                          "w-full min-w-0 max-w-[85%] overflow-auto rounded-lg px-3 py-2 text-sm",
+                          "flex w-full min-w-0",
                           message.role === "user"
-                            ? "bg-primary text-primary-foreground"
-                            : "bg-muted/60 text-foreground"
+                            ? "justify-end"
+                            : "justify-start"
                         )}
                       >
-                        {message.role === "user" ? (
-                          <p className="min-w-0 whitespace-pre-wrap break-words">
-                            {getMessageText(message)}
-                          </p>
-                        ) : (
-                          <div className="prose prose-sm dark:prose-invert max-w-none break-words [&_pre]:overflow-x-auto [&_pre]:max-w-full [&_ul]:my-1">
-                            <ReactMarkdown>
-                              {getMessageText(message) || "…"}
-                            </ReactMarkdown>
-                          </div>
-                        )}
+                        <div
+                          className={cn(
+                            "w-full min-w-0 max-w-[85%] overflow-auto rounded-lg px-3 py-2 text-sm",
+                            message.role === "user"
+                              ? "bg-primary text-primary-foreground"
+                              : "bg-muted/60 text-foreground"
+                          )}
+                        >
+                          {message.role === "user" ? (
+                            <p className="min-w-0 whitespace-pre-wrap break-words">
+                              {getMessageText(message)}
+                            </p>
+                          ) : (
+                            <div className="prose prose-sm dark:prose-invert max-w-none break-words [&_pre]:overflow-x-auto [&_pre]:max-w-full [&_ul]:my-1">
+                              <ReactMarkdown>
+                                {getMessageText(message)}
+                              </ReactMarkdown>
+                            </div>
+                          )}
+                        </div>
                       </div>
-                    </div>
+                    )}
                   </div>
                 ))}
                 {streamSteps.length > 0 && (
