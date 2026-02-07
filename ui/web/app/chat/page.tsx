@@ -246,8 +246,17 @@ export default function ChatPage() {
   const [loadingList, setLoadingList] = useState(false);
   const [loadingMessages, setLoadingMessages] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
+  const [headerStuck, setHeaderStuck] = useState(false);
 
   const isLoading = status === "streaming";
+
+  useEffect(() => {
+    const threshold = 8;
+    const onScroll = () => setHeaderStuck(window.scrollY > threshold);
+    onScroll();
+    window.addEventListener("scroll", onScroll, { passive: true });
+    return () => window.removeEventListener("scroll", onScroll);
+  }, []);
 
   const toggleStepExpanded = useCallback((id: string) => {
     setExpandedStepIds((prev) => {
@@ -395,8 +404,13 @@ export default function ChatPage() {
   return (
     <main className="flex min-h-screen flex-col bg-gradient-to-b from-background via-background to-muted/20">
       <div className="container mx-auto flex max-w-2xl flex-1 flex-col gap-4 p-4">
-        <Card className="flex flex-1 flex-col overflow-hidden border-border/60 bg-card/95 shadow-sm">
-          <CardHeader className="shrink-0 border-b px-4 py-3">
+        <Card className="flex flex-1 flex-col border-border/60 bg-card/95 shadow-sm">
+          <CardHeader
+            className={cn(
+              "sticky top-0 z-10 shrink-0 border-b bg-card/95 backdrop-blur-[6px] px-4 transition-[padding] duration-200",
+              headerStuck ? "py-2" : "py-3"
+            )}
+          >
             <div className="flex items-center justify-between gap-2">
               <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
                 <SheetTrigger asChild>
@@ -423,12 +437,12 @@ export default function ChatPage() {
                   <div className="flex-1 overflow-hidden flex flex-col min-h-0">
                     <Button
                       variant="ghost"
-                      className="w-full justify-start rounded-none border-b font-normal"
+                      className="w-full justify-start rounded-none border-b font-normal shrink-0"
                       onClick={startNewChat}
                     >
                       新对话
                     </Button>
-                    <ScrollArea className="flex-1">
+                    <ScrollArea className="flex-1 min-h-0">
                       <div className="p-2">
                         {loadingList ? (
                           <p className="text-muted-foreground text-sm py-4 text-center">加载中…</p>
@@ -474,7 +488,12 @@ export default function ChatPage() {
                   </div>
                 </SheetContent>
               </Sheet>
-              <CardTitle className="text-lg font-semibold tracking-tight">
+              <CardTitle
+                className={cn(
+                  "font-semibold tracking-tight transition-[font-size] duration-200",
+                  headerStuck ? "text-base" : "text-lg"
+                )}
+              >
                 Chat
               </CardTitle>
               <div className="w-10" />
