@@ -28,7 +28,8 @@
 | `sci-context-serde.walk` | 对 context 的「绑定树」做遍历：对每个 (sym, value) 调用给定函数并收集结果。 |
 | `sci-context-serde.core` | 对外 API：serialize(ctx opts)、deserialize(snapshot opts)。 |
 | `sci-context-serde.store` | 存/取抽象：SnapshotStore 协议，snapshot⇄EDN 字符串。不依赖具体存储。 |
-| `sci-context-serde.store.datomic` | 存/取实现：按 lookup-ref 写入/读出一个 string 类型 attribute。需 classpath 有 Datomic（见 alias :store-datomic）。 |
+| `sci-context-serde.store.content-addressable` | 按内容寻址：snapshot⇄root（name→hash）+ blobs（hash→EDN），相同 entry 同 hash，便于去重。 |
+| `sci-context-serde.store.datomic` | 存/取实现：root 存实体 attr，blob 按 hash 存独立实体（:blob/hash + :blob/edn），内容去重。需安装 blob-schema。 |
 
 每个「实际操作」都是独立函数，方便单独测试；顶层只做组合与分发，不写成一整块面条代码。
 
@@ -57,15 +58,17 @@
 
 ## 存/取（Store）
 
-core 只做「snapshot ↔ 数据结构」；持久化由 `store` 负责，目前支持 Datomic。
+core 只做「snapshot ↔ 数据结构」；持久化由 `store` 负责，目前支持 Datomic，且为**按内容寻址**。
 
-- **协议**：`sci-context-serde.store/SnapshotStore`，`save!`、`load`。
-- **Datomic**：`(store.datomic/->datomic-store conn lookup-ref attr)`。需在项目 schema 里声明 `attr`（如 `:conversation/sci-context-snapshot`）且类型为 string。使用该实现时 classpath 需有 Datomic，可用本组件的 alias：`clj -M:store-datomic`。
+- **协议**：`sci-context-serde.store/SnapshotStore`，`save!`、`load*`。
+- **内容寻址**：`store.content-addressable` 将 snapshot 拆成 root（namespace + name→hash）+ blobs（hash→单条 entry 的 EDN）。相同内容的 binding 只存一份，多次保存时未改动的部分自动复用。
+- **Datomic**：root 存到 lookup-ref 对应实体的 `attr` 上；每条 blob 存为独立实体 `:blob/hash`（identity）+ `:blob/edn`。使用前需在项目中安装 `store.datomic/blob-schema`，并声明存 root 的 attr（string）。
 
 ```clojure
 (require '[sci-context-serde.store :as store]
          '[sci-context-serde.store.datomic :as store.datomic])
 
+;; 项目 schema 需包含 (into your-schema store.datomic/blob-schema)，以及 :conversation/sci-context-snapshot 等
 (def backend (store.datomic/->datomic-store conn [:conversation/id conv-id] :conversation/sci-context-snapshot))
 (store/save-snapshot! backend snapshot)
 (def loaded (store/load-snapshot backend))
