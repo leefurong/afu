@@ -27,6 +27,8 @@
 | `sci-context-serde.deserialize` | 单条快照反序列化：deserialize-edn / deserialize-atom / deserialize-function，以及 deserialize-one。 |
 | `sci-context-serde.walk` | 对 context 的「绑定树」做遍历：对每个 (sym, value) 调用给定函数并收集结果。 |
 | `sci-context-serde.core` | 对外 API：serialize(ctx opts)、deserialize(snapshot opts)。 |
+| `sci-context-serde.store` | 存/取抽象：SnapshotStore 协议，snapshot⇄EDN 字符串。不依赖具体存储。 |
+| `sci-context-serde.store.datomic` | 存/取实现：按 lookup-ref 写入/读出一个 string 类型 attribute。需 classpath 有 Datomic（见 alias :store-datomic）。 |
 
 每个「实际操作」都是独立函数，方便单独测试；顶层只做组合与分发，不写成一整块面条代码。
 
@@ -53,9 +55,26 @@
 (sci/eval-string* ctx2 "(f x)") ; => 2
 ```
 
+## 存/取（Store）
+
+core 只做「snapshot ↔ 数据结构」；持久化由 `store` 负责，目前支持 Datomic。
+
+- **协议**：`sci-context-serde.store/SnapshotStore`，`save!`、`load`。
+- **Datomic**：`(store.datomic/->datomic-store conn lookup-ref attr)`。需在项目 schema 里声明 `attr`（如 `:conversation/sci-context-snapshot`）且类型为 string。使用该实现时 classpath 需有 Datomic，可用本组件的 alias：`clj -M:store-datomic`。
+
+```clojure
+(require '[sci-context-serde.store :as store]
+         '[sci-context-serde.store.datomic :as store.datomic])
+
+(def backend (store.datomic/->datomic-store conn [:conversation/id conv-id] :conversation/sci-context-snapshot))
+(store/save-snapshot! backend snapshot)
+(def loaded (store/load-snapshot backend))
+```
+
 ## 依赖与测试
 
-- 依赖：`org.clojure/clojure`、`org.clojure/tools.reader`、`org.babashka/sci`。
+- 依赖：`org.clojure/clojure`、`org.clojure/tools.reader`、`org.babashka/sci`。core 与 store 协议不依赖 Datomic。
+- 使用 Datomic 存贮时：`clj -M:store-datomic` 或由上层项目提供 Datomic。
 - 不依赖本仓库的 agent / web-server，可单独运行测试：
 
 ```bash

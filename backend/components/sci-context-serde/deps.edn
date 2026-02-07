@@ -4,4 +4,5 @@
         org.babashka/sci {:mvn/version "0.8.41"}}
 
  :aliases {:test {:extra-deps {lambdaisland/kaocha {:mvn/version "1.91.1392"}}
-                  :main-opts ["-m" "kaocha.runner"]}}}
+                  :main-opts ["-m" "kaocha.runner"]}
+          :store-datomic {:extra-deps {com.datomic/local {:mvn/version "1.0.291"}}}}}
