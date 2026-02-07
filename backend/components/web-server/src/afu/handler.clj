@@ -187,10 +187,24 @@
         _          (println "[chat] conv-id:" conv-id "branch-head:" branch-head "fork?" (boolean prev-msg-id))
         history    (conversation/get-messages conn conv-id branch-head)
         ;; 若历史中有 execute_clojure 的 tool 结果（带 sci-context-snapshot），恢复该条对应的 ctx 供本轮使用
-        _          (when-let [last-snapshot-msg (last (filter :sci-context-snapshot history))]
-                     (when-let [msg-id (:id last-snapshot-msg)]
-                       (when-let [snapshot (store/load-snapshot (store.datomic/->datomic-store conn [:message/id msg-id] :message/sci-context-snapshot))]
-                         (exec-ctx/restore-ctx! conv-id snapshot))))
+        _          (let [with-snapshot (filter :sci-context-snapshot history)
+                         last-snapshot-msg (last with-snapshot)]
+                     (println "[chat] load-ctx: history count =" (count history)
+                              "| messages with sci-context-snapshot =" (count with-snapshot)
+                              "| their msg-ids =" (mapv :id with-snapshot))
+                     (if (empty? with-snapshot)
+                       (println "[chat] load-ctx: no message with sci-context-snapshot, skip restore")
+                       (let [msg-id (:id last-snapshot-msg)
+                             backend (store.datomic/->datomic-store conn [:message/id msg-id] :message/sci-context-snapshot)
+                             snapshot (store/load-snapshot backend)]
+                         (println "[chat] load-ctx: last snapshot msg-id =" msg-id
+                                  "| load-snapshot result =" (if snapshot
+                                                               (str "ok, bindings count=" (count (get snapshot :bindings {})))
+                                                               "nil"))
+                         (if snapshot
+                           (do (exec-ctx/restore-ctx! conv-id snapshot)
+                               (println "[chat] load-ctx: restored ctx for conv-id =" conv-id))
+                           (println "[chat] load-ctx: snapshot nil, did not restore")))))
         ;; 发给 LLM 的是完整真实历史（含工具调用顺序），转为 API 格式
         api-msg    (history->api-messages history)
         full-msg   (conj (vec api-msg) {:role "user" :content (or user-text "")})

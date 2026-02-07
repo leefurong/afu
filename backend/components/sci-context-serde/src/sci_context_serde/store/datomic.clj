@@ -24,13 +24,24 @@
   store/SnapshotStore
   (save! [_ snapshot]
     (when (and conn lookup-ref attr snapshot)
-      (let [{:keys [root blobs]} (ca/snapshot->root+blobs snapshot)
-            blob-tx (mapv (fn [[h edn-str]] {:blob/hash h :blob/edn edn-str}) blobs)
-            root-tx (merge (into {} lookup-ref)
-                           {attr (pr-str root)})]
-        (when (seq blob-tx)
-          (d/transact conn {:tx-data blob-tx}))
-        (d/transact conn {:tx-data [root-tx]})
+      (let [;; lookup-ref 必须是 [attr value]，否则后面 :db/add 会错
+            _ (when-not (and (vector? lookup-ref) (= 2 (count lookup-ref)))
+                (throw (ex-info "DatomicStore save!: lookup-ref must be [attr value]"
+                                {:lookup-ref lookup-ref :attr attr})))
+            {:keys [root blobs]} (ca/snapshot->root+blobs snapshot)
+            root-str (pr-str root)
+            ;; 用 :db/add 列表形式提交，避免 entity map 在 Java 端被迭代时 keyword 被误当 Map$Entry
+            blob-datoms (if (map? blobs)
+                          (mapcat (fn [[i [h edn-str]]]
+                                    (let [h (str h), edn-str (str edn-str)]
+                                      [[:db/add (str "blob-" i) :blob/hash h]
+                                       [:db/add (str "blob-" i) :blob/edn edn-str]]))
+                                  (map vector (range) (seq blobs)))
+                          [])
+            root-datom [[:db/add lookup-ref attr root-str]]
+            tx-data (into (vec blob-datoms) root-datom)]
+        (when (seq tx-data)
+          (d/transact conn {:tx-data tx-data}))
         true)))
   (load* [_]
     (when (and conn lookup-ref attr)
@@ -50,8 +61,12 @@
 (defn ->datomic-store
   "构造按内容寻址的 Datomic 存贮后端。
    - conn: Datomic client 连接
-   - lookup-ref: 存 root 的实体，如 [:conversation/id conv-id]
-   - attr: 存 root EDN 字符串的 attribute（string 类型）
+   - lookup-ref: 存 root 的实体，如 [:message/id msg-id]，或 (conn attr msg-id) 误写时第二参为 keyword、第三参为 entity-id 则自动纠正
+   - attr: 存 root EDN 字符串的 attribute（keyword）
   使用前需安装 blob-schema，并确保 attr 已存在于 schema。"
   [conn lookup-ref attr]
-  (->DatomicStore conn lookup-ref attr))
+  (let [;; 若第二参是 keyword、第三参像 entity id（uuid 等），说明调用方写成了 (conn attr msg-id)，纠正为 lookup-ref=[::id attr-value], attr=keyword
+        [lookup-ref attr] (if (and (keyword? lookup-ref) (not (vector? attr)))
+                            [[:message/id attr] lookup-ref]
+                            [lookup-ref attr])]
+    (->DatomicStore conn lookup-ref attr)))
