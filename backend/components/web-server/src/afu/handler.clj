@@ -213,6 +213,40 @@
                      (ring-io/close! out)))))}))
 
 ;; ---------------------------------------------------------------------------
+;; 会话列表与历史：GET /api/conversations、GET /api/conversations/:id/messages
+;; ---------------------------------------------------------------------------
+
+(defn list-conversations-handler
+  "GET /api/conversations：返回近期会话列表 [{:id _ :title _ :updated_at _}]，按 updated_at 降序。"
+  [request]
+  (let [conn db/conn
+        items (conversation/list-recent conn)]
+    {:status 200
+     :body   (mapv (fn [m]
+                     {:id         (str (:id m))
+                      :title      (:title m)
+                      :updated_at (when-let [t (:updated_at m)]
+                                    (str (java.time.Instant/ofEpochMilli (.getTime t))))})
+                   items)}))
+
+(defn get-conversation-messages-handler
+  "GET /api/conversations/:id/messages：返回该会话主分支消息列表，供前端恢复展示。"
+  [request]
+  (let [conn    db/conn
+        id-str  (get-in request [:path-params :id])
+        conv-id (when id-str
+                  (try (java.util.UUID/fromString id-str) (catch Exception _ nil)))]
+    (if-not conv-id
+      {:status 400 :body {:error "Invalid conversation id"}}
+      (let [msgs (conversation/get-messages conn conv-id)]
+        {:status 200
+         :body   (mapv (fn [m]
+                         {:id      (str (:id m))
+                          :role    (get m :role "")
+                          :content (get m :content "")})
+                       msgs)}))))
+
+;; ---------------------------------------------------------------------------
 ;; 路由与 Ring Handler
 ;; ---------------------------------------------------------------------------
 
@@ -220,7 +254,9 @@
   (ring/router
    [["/api"
      ["/login" {:post login-handler}]
-     ["/chat"  {:post chat-handler}]]]))
+     ["/chat"  {:post chat-handler}]
+     ["/conversations" {:get list-conversations-handler}
+      ["/:id/messages" {:get get-conversation-messages-handler}]]]]))
 
 (defn ring-handler
   "无中间件的纯 Ring handler（供测试或内嵌使用）"

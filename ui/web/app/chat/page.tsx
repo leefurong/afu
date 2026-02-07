@@ -5,9 +5,30 @@ import ReactMarkdown from "react-markdown";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
+import {
+  Sheet,
+  SheetClose,
+  SheetContent,
+  SheetHeader,
+  SheetTitle,
+  SheetTrigger,
+} from "@/components/ui/sheet";
 import { cn } from "@/lib/utils";
-import { Send, Loader2, ChevronRight, ChevronDown } from "lucide-react";
+import {
+  Send,
+  Loader2,
+  ChevronRight,
+  ChevronDown,
+  PanelLeft,
+  MoreHorizontal,
+  X,
+} from "lucide-react";
 import { streamChat } from "@/services/chat";
+import {
+  listConversations,
+  getConversationMessages,
+  type ConversationItem,
+} from "@/services/conversation";
 
 const CHAT_API =
   typeof process.env.NEXT_PUBLIC_CHAT_API !== "undefined"
@@ -105,6 +126,36 @@ function CollapsibleStepBlock({
   );
 }
 
+type GroupKey = "today" | "yesterday" | "within7";
+
+function groupConversationsByTime(items: ConversationItem[]): Record<GroupKey, ConversationItem[]> {
+  const now = new Date();
+  const todayStart = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+  const yesterdayStart = new Date(todayStart);
+  yesterdayStart.setDate(yesterdayStart.getDate() - 1);
+  const sevenDaysStart = new Date(todayStart);
+  sevenDaysStart.setDate(sevenDaysStart.getDate() - 7);
+
+  const today: ConversationItem[] = [];
+  const yesterday: ConversationItem[] = [];
+  const within7: ConversationItem[] = [];
+
+  for (const item of items) {
+    const t = item.updated_at ? new Date(item.updated_at) : new Date(0);
+    if (t >= todayStart) today.push(item);
+    else if (t >= yesterdayStart) yesterday.push(item);
+    else if (t >= sevenDaysStart) within7.push(item);
+  }
+
+  return { today, yesterday, within7 };
+}
+
+const GROUP_LABELS: Record<GroupKey, string> = {
+  today: "今天",
+  yesterday: "昨天",
+  within7: "7天内",
+};
+
 export default function ChatPage() {
   const [input, setInput] = useState("");
   const [messages, setMessages] = useState<Message[]>([]);
@@ -114,6 +165,10 @@ export default function ChatPage() {
   const [error, setError] = useState<Error | null>(null);
   const [expandedStepIds, setExpandedStepIds] = useState<Set<string>>(new Set());
   const [conversationId, setConversationId] = useState<string | null>(null);
+  const [drawerOpen, setDrawerOpen] = useState(false);
+  const [conversationList, setConversationList] = useState<ConversationItem[]>([]);
+  const [loadingList, setLoadingList] = useState(false);
+  const [loadingMessages, setLoadingMessages] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
 
   const isLoading = status === "streaming";
@@ -130,6 +185,43 @@ export default function ChatPage() {
   useEffect(() => {
     scrollRef.current?.scrollIntoView({ behavior: "smooth" });
   }, [messages, streamingContent, streamSteps]);
+
+  useEffect(() => {
+    if (!drawerOpen) return;
+    setLoadingList(true);
+    listConversations()
+      .then(setConversationList)
+      .catch(() => setConversationList([]))
+      .finally(() => setLoadingList(false));
+  }, [drawerOpen]);
+
+  const loadConversation = useCallback(async (id: string) => {
+    setLoadingMessages(true);
+    try {
+      const list = await getConversationMessages(id);
+      const msgs: Message[] = list
+        .filter((m) => m.role === "user" || m.role === "assistant")
+        .map((m) => ({
+          id: m.id,
+          role: m.role as "user" | "assistant",
+          parts: [{ type: "text" as const, text: m.content ?? "" }],
+        }));
+      setMessages(msgs);
+      setConversationId(id);
+      setDrawerOpen(false);
+    } finally {
+      setLoadingMessages(false);
+    }
+  }, []);
+
+  const startNewChat = useCallback(() => {
+    setMessages([]);
+    setConversationId(null);
+    setStreamingContent("");
+    setStreamSteps([]);
+    setError(null);
+    setDrawerOpen(false);
+  }, []);
 
   const clearError = useCallback(() => setError(null), []);
 
@@ -227,14 +319,96 @@ export default function ChatPage() {
     [input, isLoading, conversationId]
   );
 
+  const grouped = groupConversationsByTime(conversationList);
+  const hasAny = grouped.today.length + grouped.yesterday.length + grouped.within7.length > 0;
+
   return (
     <main className="flex min-h-screen flex-col bg-gradient-to-b from-background via-background to-muted/20">
       <div className="container mx-auto flex max-w-2xl flex-1 flex-col gap-4 p-4">
         <Card className="flex flex-1 flex-col overflow-hidden border-border/60 bg-card/95 shadow-sm">
           <CardHeader className="shrink-0 border-b px-4 py-3">
-            <CardTitle className="text-lg font-semibold tracking-tight">
-              Chat
-            </CardTitle>
+            <div className="flex items-center justify-between gap-2">
+              <Sheet open={drawerOpen} onOpenChange={setDrawerOpen}>
+                <SheetTrigger asChild>
+                  <Button variant="ghost" size="icon" className="shrink-0" aria-label="打开历史会话">
+                    <PanelLeft className="size-5" />
+                  </Button>
+                </SheetTrigger>
+                <SheetContent side="left" showCloseButton={false} className="w-[280px] sm:max-w-[320px] p-0 flex flex-col">
+                  <SheetHeader className="border-b px-4 py-3">
+                    <div className="flex items-center justify-between gap-2">
+                      <SheetTitle className="text-base font-semibold">最近</SheetTitle>
+                      <div className="flex items-center gap-1">
+                        <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="更多">
+                          <MoreHorizontal className="size-4 text-muted-foreground" />
+                        </Button>
+                        <SheetClose asChild>
+                          <Button variant="ghost" size="icon" className="h-8 w-8" aria-label="关闭">
+                            <X className="size-4 text-muted-foreground" />
+                          </Button>
+                        </SheetClose>
+                      </div>
+                    </div>
+                  </SheetHeader>
+                  <div className="flex-1 overflow-hidden flex flex-col min-h-0">
+                    <Button
+                      variant="ghost"
+                      className="w-full justify-start rounded-none border-b font-normal"
+                      onClick={startNewChat}
+                    >
+                      新对话
+                    </Button>
+                    <ScrollArea className="flex-1">
+                      <div className="p-2">
+                        {loadingList ? (
+                          <p className="text-muted-foreground text-sm py-4 text-center">加载中…</p>
+                        ) : !hasAny ? (
+                          <p className="text-muted-foreground text-sm py-4 text-center">暂无历史会话</p>
+                        ) : (
+                          (["today", "yesterday", "within7"] as const).map((key) => {
+                            const list = grouped[key];
+                            if (list.length === 0) return null;
+                            return (
+                              <div key={key} className="mb-4">
+                                <p className="text-muted-foreground text-xs font-medium px-2 py-1.5">
+                                  {GROUP_LABELS[key]}
+                                </p>
+                                <ul className="space-y-0.5">
+                                  {list.map((item) => (
+                                    <li key={item.id}>
+                                      <button
+                                        type="button"
+                                        disabled={loadingMessages}
+                                        onClick={() => loadConversation(item.id)}
+                                        className={cn(
+                                          "w-full text-left rounded-md px-2 py-2 text-sm truncate flex items-center gap-2 group",
+                                          conversationId === item.id
+                                            ? "bg-muted"
+                                            : "hover:bg-muted/60"
+                                        )}
+                                      >
+                                        <span className="min-w-0 flex-1 truncate">{item.title}</span>
+                                        <span className="shrink-0 opacity-0 group-hover:opacity-70">
+                                          <MoreHorizontal className="size-4 text-muted-foreground" />
+                                        </span>
+                                      </button>
+                                    </li>
+                                  ))}
+                                </ul>
+                              </div>
+                            );
+                          })
+                        )}
+                      </div>
+                    </ScrollArea>
+                  </div>
+                </SheetContent>
+              </Sheet>
+              <CardTitle className="text-lg font-semibold tracking-tight">
+                Chat
+              </CardTitle>
+              <div className="w-10" />
+            </div>
           </CardHeader>
           <CardContent className="flex min-h-0 flex-1 flex-col gap-4 p-0">
             <ScrollArea className="flex-1 px-4">

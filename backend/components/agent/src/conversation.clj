@@ -285,3 +285,42 @@
           tx (into (vec msg-retracts) (or conv-retracts []))]
       (when (seq tx)
         (d/transact conn {:tx-data tx})))))
+
+;; ---------------------------------------------------------------------------
+;; 列表：近期会话（供侧边栏展示）
+;; ---------------------------------------------------------------------------
+
+(def ^:private max-title-len 40)
+
+(defn- first-user-content
+  "从 head 沿 prev-id 回溯得到时间正序消息，取第一条 user 的 content，截断。"
+  [db head-id]
+  (when head-id
+    (let [chronological (reverse (loop [acc [], mid head-id]
+                                  (if-let [m (pull-message db mid)]
+                                    (let [data (try (edn/read-string (or (:message/data m) "{}"))
+                                                    (catch Exception _ {}))]
+                                      (recur (conj acc {:role (get data :role) :content (get data :content "")})
+                                             (:message/prev-id m)))
+                                    (reverse acc))))]
+      (when (seq chronological)
+        (when-let [content (some #(when (= "user" (:role %)) (:content %)) chronological)]
+          (if (> (count content) max-title-len)
+            (str (subs content 0 max-title-len) "…")
+            content))))))
+
+(defn list-recent
+  "返回近期会话列表，每项 {:id uuid :title string :updated_at instant}，按 updated_at 降序。
+   title 为第一条 user 消息内容截断，无则「新对话」。"
+  [conn]
+  (let [db (d/db conn)
+        conv-heads (d/q '[:find ?cid ?head :where [?e :conversation/id ?cid] [?e :conversation/head ?head]] db)
+        with-time (for [[cid head] conv-heads
+                        :when cid]
+                   (let [title (or (first-user-content db head) "新对话")
+                         updated-at (when head (get (pull-message db head) :message/created-at))]
+                     ;; 无 head 的会话用 Long/MIN 保证排最后
+                     {:id cid
+                      :title title
+                      :updated_at (or updated-at (java.util.Date. 0))}))]
+    (reverse (sort-by :updated_at with-time))))
