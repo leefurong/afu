@@ -1,0 +1,7 @@
+{:paths ["src" "resources" "test"]
+ :deps {org.clojure/clojure {:mvn/version "1.11.1"}
+        org.clojure/tools.reader {:mvn/version "1.3.6"}
+        org.babashka/sci {:mvn/version "0.8.41"}}
+
+ :aliases {:test {:extra-deps {lambdaisland/kaocha {:mvn/version "1.91.1392"}}
+                  :main-opts ["-m" "kaocha.runner"]}}}

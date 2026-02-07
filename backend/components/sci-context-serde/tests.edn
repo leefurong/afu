@@ -1,0 +1,2 @@
+#kaocha/v1 {}
+;; 默认会扫描 test/ 下所有 *_test.clj 并用 clojure.test 运行
