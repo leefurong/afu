@@ -317,10 +317,9 @@
         conv-heads (d/q '[:find ?cid ?head :where [?e :conversation/id ?cid] [?e :conversation/head ?head]] db)
         with-time (for [[cid head] conv-heads
                         :when cid]
-                   (let [title (or (first-user-content db head) "新对话")
-                         updated-at (when head (get (pull-message db head) :message/created-at))]
-                     ;; 无 head 的会话用 Long/MIN 保证排最后
-                     {:id cid
-                      :title title
-                      :updated_at (or updated-at (java.util.Date. 0))}))]
+                    (let [title (or (first-user-content db head) "新对话")
+                          updated-at (when head (get (pull-message db head) :message/created-at))]
+                      {:id cid
+                       :title title
+                       :updated_at (or updated-at (java.util.Date. 0))}))]
     (reverse (sort-by :updated_at with-time))))

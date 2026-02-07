@@ -216,18 +216,32 @@
 ;; 会话列表与历史：GET /api/conversations、GET /api/conversations/:id/messages
 ;; ---------------------------------------------------------------------------
 
+(defn- temporal-to-iso-str
+  "将 Date 或 Instant 转为 ISO 字符串，避免序列化时 NPE。只返回字符串或 nil。"
+  [t]
+  (when t
+    (let [millis (cond (instance? java.util.Date t)   (.getTime ^java.util.Date t)
+                       (instance? java.time.Instant t) (.toEpochMilli ^java.time.Instant t)
+                       :else nil)]
+      (when (and millis (number? millis))
+        (str (java.time.Instant/ofEpochMilli (long millis)))))))
+
 (defn list-conversations-handler
-  "GET /api/conversations：返回近期会话列表 [{:id _ :title _ :updated_at _}]，按 updated_at 降序。"
-  [request]
-  (let [conn db/conn
-        items (conversation/list-recent conn)]
-    {:status 200
-     :body   (mapv (fn [m]
-                     {:id         (str (:id m))
-                      :title      (:title m)
-                      :updated_at (when-let [t (:updated_at m)]
-                                    (str (java.time.Instant/ofEpochMilli (.getTime t))))})
-                   items)}))
+  "GET /api/conversations：返回近期会话列表。body 仅用字符串 key，避免 ring-json 序列化抛错导致 Response nil。"
+  [_request]
+  (try
+    (let [conn  db/conn
+          items (conversation/list-recent conn)
+          ;; 仅字符串 key + 字符串/nil 值，保证 cheshire 序列化不抛错
+          body  (mapv (fn [m]
+                       {"id"         (str (:id m))
+                        "title"      (str (or (:title m) ""))
+                        "updated_at" (or (temporal-to-iso-str (:updated_at m)) nil)})
+                     items)]
+      {:status 200
+       :body   body})
+    (catch Throwable t
+      {:status 500 :body {"error" (str (.getMessage t))}})))
 
 (defn get-conversation-messages-handler
   "GET /api/conversations/:id/messages：返回该会话主分支消息列表，供前端恢复展示。"
@@ -255,13 +269,16 @@
    [["/api"
      ["/login" {:post login-handler}]
      ["/chat"  {:post chat-handler}]
-     ["/conversations" {:get list-conversations-handler}
-      ["/:id/messages" {:get get-conversation-messages-handler}]]]]))
+     ;; 扁平写死每条 path，避免嵌套导致 GET /api/conversations 不匹配
+     ["/conversations" {:get list-conversations-handler}]
+     ["/conversations/:id/messages" {:get get-conversation-messages-handler}]]]))
 
 (defn ring-handler
-  "无中间件的纯 Ring handler（供测试或内嵌使用）"
+  "无中间件的纯 Ring handler。无匹配路由时返回 404，避免返回 nil 导致 Response map is nil。"
   []
-  (ring/ring-handler router))
+  (ring/ring-handler
+   router
+   (fn [_] {:status 404 :headers {"Content-Type" "application/json"} :body "{\"error\":\"Not found\"}"})))
 
 ;; ---------------------------------------------------------------------------
 ;; 中间件：JSON Body 解析 + JSON 响应 + CORS
@@ -287,6 +304,24 @@
                   :access-control-expose-headers ["Authorization"]))
 
 ;; ---------------------------------------------------------------------------
+;; 异常兜底：防止 handler 或 wrap-json 抛错导致 Response map is nil
+;; ---------------------------------------------------------------------------
+
+(defn wrap-catch-response
+  "最外层：捕获异常返回 500；若 handler 返回 nil 则返回 404，避免 Response map is nil。"
+  [handler]
+  (fn [request]
+    (try
+      (let [response (handler request)]
+        (if (nil? response)
+          {:status 404 :headers {"Content-Type" "application/json"} :body "{\"error\":\"Not found\"}"}
+          response))
+      (catch Throwable t
+        {:status  500
+         :headers {"Content-Type" "application/json"}
+         :body    (json/generate-string {"error" (str (.getMessage t))})}))))
+
+;; ---------------------------------------------------------------------------
 ;; 对外入口：带 JSON + CORS 的 App
 ;; ---------------------------------------------------------------------------
 
@@ -296,4 +331,5 @@
   []
   (-> (ring-handler)
       wrap-json
-      wrap-cors-policy))
+      wrap-cors-policy
+      wrap-catch-response))

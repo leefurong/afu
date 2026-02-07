@@ -8,5 +8,9 @@
 
           :sci-repl {:main-opts ["-m" "agent.tools.execute-clojure.sci-repl"]}
 
-          :web-server {:extra-deps {org.slf4j/slf4j-simple {:mvn/version "2.0.9"}}
-             :main-opts ["-m" "afu.core"]}}}
+          :web-server {:extra-deps {org.slf4j/slf4j-simple {:mvn/version "2.0.9"}
+                                    nrepl/nrepl             {:mvn/version "1.3.1"}}
+                      :main-opts ["-m" "afu.core"]}
+
+          ;; 与 web-server 同 classpath，但不启服；供服务器运行时，访问内部状态便于调试
+          :repl {:extra-deps {org.slf4j/slf4j-simple {:mvn/version "2.0.9"}}}}}
