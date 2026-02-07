@@ -3,7 +3,8 @@
    每条 record 带 conversation-id，便于按会话批量删除。
    与 memory（跨会话记忆）区分：此处仅存单次会话的消息链，用于连续对话上下文。"
   (:require [datomic.client.api :as d]
-            [clojure.edn :as edn]))
+            [clojure.edn :as edn]
+            [sci-context-serde.store.datomic :as sci-store]))
 
 ;; ---------------------------------------------------------------------------
 ;; Schema
@@ -49,12 +50,16 @@
    {:db/ident       :message/created-at
     :db/valueType   :db.type/instant
     :db/cardinality :db.cardinality/one
-    :db/doc         "创建时间（也可用 :db/txInstant 做时间序）"}])
+    :db/doc         "创建时间（也可用 :db/txInstant 做时间序）"}
+   {:db/ident       :message/sci-context-snapshot
+    :db/valueType   :db.type/string
+    :db/cardinality :db.cardinality/one
+    :db/doc         "该条为 execute_clojure 的 tool 结果时，存 SCI context 快照的 root（EDN 字符串），blob 在全局 blob 表"}])
 
 (defn ensure-schema!
-  "应用会话与消息 schema，启动时调用一次。"
+  "应用会话与消息 schema（含 sci-context-serde blob 表），启动时调用一次。"
   [conn]
-  (d/transact conn {:tx-data (into conversation-schema message-schema)}))
+  (d/transact conn {:tx-data (into conversation-schema (into message-schema sci-store/blob-schema))}))
 
 ;; ---------------------------------------------------------------------------
 ;; 内部：按 message id 查 entity id / 拉取 entity
@@ -64,7 +69,7 @@
 (defn- pull-message
   [db message-id]
   (when message-id
-    (d/pull db [:message/id :message/conversation-id :message/prev-id :message/next-ids :message/selected-next-id :message/data :message/created-at]
+    (d/pull db [:message/id :message/conversation-id :message/prev-id :message/next-ids :message/selected-next-id :message/data :message/created-at :message/sci-context-snapshot]
             [:message/id message-id])))
 
 (defn- retract-entity-tx
@@ -182,12 +187,13 @@
            raw (loop [acc [], mid head-message-id]
                  (if-let [m (pull-message db mid)]
                    (let [data (try (edn/read-string (or (:message/data m) "{}"))
-                                   (catch Exception _ {}))]
-                     (recur (conj acc {:id mid :data data}) (:message/prev-id m)))
+                                   (catch Exception _ {}))
+                         sci (get m :message/sci-context-snapshot)]
+                     (recur (conj acc {:id mid :data data :sci-context-snapshot sci}) (:message/prev-id m)))
                    (reverse acc)))]
-       (mapv (fn [{:keys [id data]}]
+       (mapv (fn [{:keys [id data sci-context-snapshot]}]
                (let [{:keys [can-left? can-right?]} (can-left-right-for-message db id)]
-                 (assoc data :id id :can-left? can-left? :can-right? can-right?)))
+                 (assoc data :id id :can-left? can-left? :can-right? can-right? :sci-context-snapshot sci-context-snapshot)))
              raw)))))
 
 (defn append-messages!
@@ -240,7 +246,8 @@
                     (when update-head?
                       [{:conversation/id conversation-id
                         :conversation/head (last new-ids)}])))]
-       (d/transact conn {:tx-data tx})))))
+       (d/transact conn {:tx-data tx})
+       new-ids))))
 
 (defn delete-message!
   "删除一条消息 record，并维护链表：前驱的 next-ids 去掉本节点并接上本节点的 next-ids；后继的 prev-id 指向前驱。"

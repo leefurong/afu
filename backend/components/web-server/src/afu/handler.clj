@@ -6,10 +6,14 @@
             [clojure.core.async :as a]
             [cheshire.core :as json]
             [agent :as agent]
+            [agent.tools.execute-clojure.context :as exec-ctx]
             [agentmanager :as agentmanager]
             [afu.account.core :as account]
             [afu.db :as db]
-            [conversation :as conversation]))
+            [conversation :as conversation]
+            [sci-context-serde.core :as serde]
+            [sci-context-serde.store :as store]
+            [sci-context-serde.store.datomic :as store.datomic]))
 
 ;; 目前聊天统一用这个固定 agent id（后续可改为按用户/会话）
 (def ^:private fixed-agent-id #uuid "00000000-0000-0000-0000-000000000001")
@@ -110,8 +114,23 @@
                             final-content (str content-acc)
                             new-msgs (into [{:role "user" :content user-text}]
                                            (cond-> (or api-shaped [])
-                                             (seq final-content) (conj {:role "assistant" :content final-content})))]
-                        (conversation/append-messages! conn conversation-id new-msgs branch-head update-main-head?)))
+                                             (seq final-content) (conj {:role "assistant" :content final-content})))
+                            new-ids (conversation/append-messages! conn conversation-id new-msgs branch-head update-main-head?)]
+                        (when (and (seq steps) (seq new-ids))
+                          (let [ctx (exec-ctx/get-or-create-ctx conversation-id)]
+                            (doseq [i (range (/ (count steps) 2))]
+                              (let [tc (nth steps (* 2 i))
+                                    name (get tc :name "")]
+                                (when (= name "execute_clojure")
+                                  (let [msg-id (nth new-ids (+ 2 i) nil)
+                                        code (str (get tc :content ""))]
+                                    (when msg-id
+                                      (try
+                                        (let [snapshot (serde/serialize ctx {:recent-code code})
+                                              backend (store.datomic/->datomic-store conn [:message/id msg-id] :message/sci-context-snapshot)]
+                                          (store/save-snapshot! backend snapshot))
+                                        (catch Throwable ex
+                                          (println "[chat] save sci-context-snapshot failed:" (.getMessage ex)))))))))))))
                     (when (and conn v (some? (:agent-id v)))
                       (agentmanager/save-agent! conn v))
                     (catch Throwable t
@@ -167,6 +186,11 @@
         branch-head (or prev-msg-id (conversation/get-head conn conv-id))
         _          (println "[chat] conv-id:" conv-id "branch-head:" branch-head "fork?" (boolean prev-msg-id))
         history    (conversation/get-messages conn conv-id branch-head)
+        ;; 若历史中有 execute_clojure 的 tool 结果（带 sci-context-snapshot），恢复该条对应的 ctx 供本轮使用
+        _          (when-let [last-snapshot-msg (last (filter :sci-context-snapshot history))]
+                     (when-let [msg-id (:id last-snapshot-msg)]
+                       (when-let [snapshot (store/load-snapshot (store.datomic/->datomic-store conn [:message/id msg-id] :message/sci-context-snapshot))]
+                         (exec-ctx/restore-ctx! conv-id snapshot))))
         ;; 发给 LLM 的是完整真实历史（含工具调用顺序），转为 API 格式
         api-msg    (history->api-messages history)
         full-msg   (conj (vec api-msg) {:role "user" :content (or user-text "")})
