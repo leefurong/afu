@@ -70,3 +70,67 @@
       (conv/append-messages! *conn* id [{:role "user" :content "x"}])
       (conv/append-messages! *conn* id [])
       (is (= [{:role "user" :content "x"}] (conv/get-messages *conn* id))))))
+
+(deftest fork-append-after-prev
+  (testing "在 prev 后追加且 update-main-head? false 时，主分支 head 不变（fork 语义）"
+    (let [id (conv/create! *conn*)]
+      (conv/append-messages! *conn* id [{:role "user" :content "1"} {:role "assistant" :content "a"}])
+      (let [main-head (conv/get-head *conn* id)]
+        (conv/append-messages! *conn* id [{:role "user" :content "fork"} {:role "assistant" :content "fork-reply"}]
+                              main-head false)
+        (is (= main-head (conv/get-head *conn* id)) "主分支 head 应不变")
+        (is (= 2 (count (conv/get-messages *conn* id))) "主分支仍为 2 条")))))
+
+(deftest delete-message-relinks
+  (testing "delete-message! 删除 head 后链表重连，主分支 head 变为前一条"
+    (let [id (conv/create! *conn*)]
+      (conv/append-messages! *conn* id [{:role "user" :content "1"} {:role "assistant" :content "a"}])
+      (conv/append-messages! *conn* id [{:role "user" :content "2"} {:role "assistant" :content "b"}])
+      (let [head (conv/get-head *conn* id)
+            hist (conv/get-messages *conn* id)]
+        (is (= 4 (count hist)))
+        (conv/delete-message! *conn* head) ;; 删除最后一条 "b"
+        (let [after (conv/get-messages *conn* id)]
+          (is (= 3 (count after)))
+          (is (= "2" (get (last after) :content))))))))
+
+(deftest delete-conversation-removes-all
+  (testing "delete-conversation! 删除会话下所有 message 及会话本身"
+    (let [id (conv/create! *conn*)]
+      (conv/append-messages! *conn* id [{:role "user" :content "x"}])
+      (is (= 1 (count (conv/get-messages *conn* id))))
+      (conv/delete-conversation! *conn* id)
+      (is (= [] (conv/get-messages *conn* id)))
+      (is (nil? (conv/get-head *conn* id))))))
+
+(deftest compute-head-from
+  (testing "从 head 开始 compute-head-from 返回自身；顺藤摸瓜沿 selected-next-id 走到无后继"
+    (let [id (conv/create! *conn*)]
+      (conv/append-messages! *conn* id [{:role "user" :content "1"} {:role "assistant" :content "a"}])
+      (let [h (conv/get-head *conn* id)]
+        (is (= h (conv/compute-head-from *conn* h)) "从 head 算 head 即自身"))
+      (conv/append-messages! *conn* id [{:role "user" :content "2"} {:role "assistant" :content "b"}])
+      (let [h (conv/get-head *conn* id)]
+        (is (= h (conv/compute-head-from *conn* h)) "续写后从 head 算仍为自身")))))
+
+(deftest left!-and-right!
+  (testing "fork 后 left! / right! 切换选中的后继，返回新选中的 id；无左/右时返回 nil"
+    (let [id (conv/create! *conn*)]
+      (conv/append-messages! *conn* id [{:role "user" :content "1"} {:role "assistant" :content "a"}])
+      (let [a-id (conv/get-head *conn* id)]
+        (conv/append-messages! *conn* id [{:role "user" :content "2"} {:role "assistant" :content "b"}])
+        (conv/append-messages! *conn* id [{:role "user" :content "fork"} {:role "assistant" :content "fr"}]
+                              a-id false)
+        ;; fork 点在 a，next-ids = [2 的 id, fork 的 id]，ordered 按时间 = [2, fork]，当前 selected = fork
+        (let [fork-head (conv/compute-head-from *conn* a-id)
+              main-head (conv/get-head *conn* id)]
+          (is (some? fork-head) "fork 分支有 head")
+          (let [left-id (conv/left! *conn* fork-head)]
+            (is (some? left-id) "向左切到主分支，返回被选中的后继 id（主分支首条 2）")
+            (is (= (conv/compute-head-from *conn* left-id) main-head) "从该 id 顺藤摸瓜得到主分支 head"))
+          (let [again (conv/left! *conn* (conv/compute-head-from *conn* a-id))]
+            (is (nil? again) "已在最左，再 left 返回 nil"))
+          (let [right-id (conv/right! *conn* main-head)]
+            (is (some? right-id) "从主分支 right 切到 fork，返回 fork 首条 id"))
+          (let [again (conv/right! *conn* (conv/compute-head-from *conn* a-id))]
+            (is (nil? again) "已在最右，再 right 返回 nil")))))))

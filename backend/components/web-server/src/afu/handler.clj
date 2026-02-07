@@ -70,8 +70,9 @@
        (some? v) (assoc :value v)))))
 
 (defn- write-event-ch-to-stream
-  "把 event ch 里的事件写成 NDJSON 到 out；收集 content 与 tool_call/tool_result 用于会话历史；:done 时保存 agent 并追加会话消息（含工具调用过程）。"
-  [ch out conn conversation-id user-text]
+  "把 event ch 里的事件写成 NDJSON 到 out；收集 content 与 tool_call/tool_result 用于会话历史；:done 时保存 agent 并追加会话消息（含工具调用过程）。
+   branch-head 为当前分支头 message id（append 时挂在其后）；update-main-head? 为 true 时同时更新主分支 head（非 fork 场景）。"
+  [ch out conn conversation-id user-text branch-head update-main-head?]
   (let [content-acc (StringBuilder.)
         tool-steps (atom [])]
     (loop []
@@ -88,7 +89,8 @@
                     (when (and conn conversation-id (seq user-text))
                       (conversation/append-messages! conn conversation-id
                         (into [{:role "user" :content user-text}]
-                              (conj (vec @tool-steps) {:role "assistant" :content (str content-acc)}))))
+                              (conj (vec @tool-steps) {:role "assistant" :content (str content-acc)}))
+                        branch-head update-main-head?))
                     (when (and conn v (some? (:agent-id v)))
                       (agentmanager/save-agent! conn v))
                     (catch Throwable t
@@ -164,17 +166,29 @@
         raw
         (try (java.util.UUID/fromString (str raw)) (catch Exception _ nil))))))
 
+(defn- resolve-prev-message-id
+  "从 body 取 prev_message_id（fork 时「在这条之后追加」的 message id），UUID 或 nil。"
+  [body]
+  (let [raw (or (get body :prev_message_id) (get body "prev_message_id"))]
+    (when raw
+      (if (instance? java.util.UUID raw)
+        raw
+        (try (java.util.UUID/fromString (str raw)) (catch Exception _ nil))))))
+
 (defn chat-handler
-  "POST /api/chat：支持会话历史。body 可带 conversation_id（可选）、text 或 messages。
-   无 conversation_id 时新建会话；有则加载历史，拼上本条 user 消息后请求 agent；流式返回，:done 时写回会话并返回 conversation_id。"
+  "POST /api/chat：支持会话历史与 fork。body 可带 conversation_id（可选）、prev_message_id（可选，fork 时指定「在此之后追加」）、text 或 messages。
+   无 conversation_id 时新建会话；有则按 prev_message_id 或主分支 head 加载该分支历史，拼上本条 user 消息后请求 agent；流式返回，:done 时写回并返回 conversation_id。"
   [request]
   (let [conn       db/conn
         body       (get request :body {})
         user-text  (last-user-text body)
         _          (println "[chat] request body keys:" (keys body) "user-text len:" (count (str user-text)) "conv-id from body?" (boolean (resolve-conversation-id body)))
         conv-id    (or (resolve-conversation-id body) (conversation/create! conn))
-        _          (println "[chat] conv-id:" conv-id)
-        history    (conversation/get-messages conn conv-id)
+        prev-msg-id (resolve-prev-message-id body)
+        ;; 当前分支头：客户端传 prev_message_id 表示在该条之后续写（含 fork），否则用主分支 head
+        branch-head (or prev-msg-id (conversation/get-head conn conv-id))
+        _          (println "[chat] conv-id:" conv-id "branch-head:" branch-head "fork?" (boolean prev-msg-id))
+        history    (conversation/get-messages conn conv-id branch-head)
         ;; 发给 LLM 的是完整真实历史（含工具调用顺序），转为 API 格式
         api-msg    (history->api-messages history)
         full-msg   (conj (vec api-msg) {:role "user" :content (or user-text "")})
@@ -182,6 +196,7 @@
         current    (agentmanager/get-or-create-agent! conn fixed-agent-id)
         opts       (assoc (agent/chat-with-tools-opts) :tool-ctx {:conversation-id conv-id})
         ch         (agent/chat current full-msg opts)
+        ;; 流式写回时需传入 branch-head 与是否更新主分支，以便 append 挂在正确 prev 上
         _          (println "[chat] agent/chat returned ch, returning 200 + stream")]
     {:status  200
      :headers {"Content-Type" "application/x-ndjson; charset=UTF-8"}
@@ -189,7 +204,7 @@
                (fn [out]
                  (try
                    (println "[chat] stream producer started, reading from ch ...")
-                   (write-event-ch-to-stream ch out conn conv-id (or user-text ""))
+                   (write-event-ch-to-stream ch out conn conv-id (or user-text "") branch-head (nil? prev-msg-id))
                    (println "[chat] stream producer finished (ch closed)")
                    (catch Throwable t
                      (println "[chat] stream producer error:" (.getMessage t))
