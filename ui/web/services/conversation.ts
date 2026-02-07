@@ -14,6 +14,8 @@ export type ConversationMessage = {
   id: string;
   role: string;
   content: string;
+  tool_calls?: { id: string; type: string; function: { name: string; arguments: string } }[];
+  tool_call_id?: string;
 };
 
 export async function listConversations(): Promise<ConversationItem[]> {

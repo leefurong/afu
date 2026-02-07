@@ -28,6 +28,7 @@ import {
   listConversations,
   getConversationMessages,
   type ConversationItem,
+  type ConversationMessage,
 } from "@/services/conversation";
 
 const CHAT_API =
@@ -54,6 +55,81 @@ function getMessageText(message: Message): string {
     .filter((p): p is MessagePart => p.type === "text" && typeof p.text === "string")
     .map((p) => p.text)
     .join("");
+}
+
+/** 将 API 返回的消息列表（assistant+tool_calls, role=tool）转为带 steps 的 Message[]。 */
+function apiMessagesToMessages(list: ConversationMessage[]): Message[] {
+  const out: Message[] = [];
+  let i = 0;
+  while (i < list.length) {
+    const m = list[i];
+    if (m.role === "user") {
+      out.push({
+        id: m.id,
+        role: "user",
+        parts: [{ type: "text", text: m.content ?? "" }],
+      });
+      i++;
+      continue;
+    }
+    if (m.role === "assistant" && m.tool_calls?.length) {
+      const toolCalls = m.tool_calls;
+      const steps: StreamStep[] = [];
+      for (let j = 0; j < toolCalls.length; j++) {
+        const tc = toolCalls[j];
+        let code = "";
+        try {
+          const args = JSON.parse(tc.function?.arguments ?? "{}");
+          code = typeof args.code === "string" ? args.code : "";
+        } catch {
+          code = tc.function?.arguments ?? "";
+        }
+        steps.push({
+          id: tc.id ?? newId(),
+          type: "tool_call",
+          name: tc.function?.name ?? "execute_clojure",
+          code,
+        });
+        const toolMsg = list[i + 1 + j];
+        if (toolMsg?.role === "tool") {
+          let result: unknown = toolMsg.content ?? "";
+          try {
+            result = JSON.parse(toolMsg.content ?? "{}");
+          } catch {
+            result = toolMsg.content ?? "";
+          }
+          steps.push({
+            id: toolMsg.id,
+            type: "tool_result",
+            result,
+          });
+        }
+      }
+      out.push({
+        id: m.id,
+        role: "assistant",
+        parts: [{ type: "text", text: m.content ?? "" }],
+        steps: steps.length > 0 ? steps : undefined,
+      });
+      i += 1 + toolCalls.length;
+      continue;
+    }
+    if (m.role === "assistant") {
+      out.push({
+        id: m.id,
+        role: "assistant",
+        parts: [{ type: "text", text: m.content ?? "" }],
+      });
+      i++;
+      continue;
+    }
+    if (m.role === "tool") {
+      i++;
+      continue;
+    }
+    i++;
+  }
+  return out;
 }
 
 function newId(): string {
@@ -199,13 +275,7 @@ export default function ChatPage() {
     setLoadingMessages(true);
     try {
       const list = await getConversationMessages(id);
-      const msgs: Message[] = list
-        .filter((m) => m.role === "user" || m.role === "assistant")
-        .map((m) => ({
-          id: m.id,
-          role: m.role as "user" | "assistant",
-          parts: [{ type: "text" as const, text: m.content ?? "" }],
-        }));
+      const msgs = apiMessagesToMessages(list);
       setMessages(msgs);
       setConversationId(id);
       setDrawerOpen(false);

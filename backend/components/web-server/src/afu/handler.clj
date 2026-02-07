@@ -69,9 +69,26 @@
      (cond-> {:type (name k)}
        (some? v) (assoc :value v)))))
 
+(defn- tool-steps->api-shaped-messages
+  "将流式收集的 [tool_call tool_result ...] 转为与 LLM API 一致：一条 assistant（tool_calls）+ N 条 role=tool。"
+  [tool-steps]
+  (let [pairs (partition 2 (vec tool-steps))
+        tool-calls (mapv (fn [i [tc _tr]]
+                           {:id (str "p-" i)
+                            :type "function"
+                            :function {:name (get tc :name "execute_clojure")
+                                       :arguments (json/generate-string {:code (get tc :content "")})}})
+                         (range) pairs)
+        tool-msgs (mapv (fn [i [_tc tr]]
+                          {:role "tool"
+                           :tool_call_id (str "p-" i)
+                           :content (get tr :content "")})
+                        (range) pairs)]
+    (into [{:role "assistant" :content "" :tool_calls tool-calls}]
+          tool-msgs)))
+
 (defn- write-event-ch-to-stream
-  "把 event ch 里的事件写成 NDJSON 到 out；收集 content 与 tool_call/tool_result 用于会话历史；:done 时保存 agent 并追加会话消息（含工具调用过程）。
-   branch-head 为当前分支头 message id（append 时挂在其后）；update-main-head? 为 true 时同时更新主分支 head（非 fork 场景）。"
+  "把 event ch 里的事件写成 NDJSON 到 out；收集 content 与 tool_call/tool_result 用于会话历史；:done 时按 LLM 消息格式（assistant+tool_calls, role=tool）追加。"
   [ch out conn conversation-id user-text branch-head update-main-head?]
   (let [content-acc (StringBuilder.)
         tool-steps (atom [])]
@@ -87,10 +104,14 @@
             :tool-result (swap! tool-steps conj {:role "tool_result" :content (pr-str v)})
             :done (try
                     (when (and conn conversation-id (seq user-text))
-                      (conversation/append-messages! conn conversation-id
-                        (into [{:role "user" :content user-text}]
-                              (conj (vec @tool-steps) {:role "assistant" :content (str content-acc)}))
-                        branch-head update-main-head?))
+                      (let [steps (vec @tool-steps)
+                            api-shaped (when (seq steps)
+                                         (tool-steps->api-shaped-messages steps))
+                            final-content (str content-acc)
+                            new-msgs (into [{:role "user" :content user-text}]
+                                           (cond-> (or api-shaped [])
+                                             (seq final-content) (conj {:role "assistant" :content final-content})))]
+                        (conversation/append-messages! conn conversation-id new-msgs branch-head update-main-head?)))
                     (when (and conn v (some? (:agent-id v)))
                       (agentmanager/save-agent! conn v))
                     (catch Throwable t
@@ -101,61 +122,18 @@
         (recur)))))
 
 (defn- history->api-messages
-  "把 DB 里存的会话历史（含 tool_call/tool_result）转成 LLM API 可接受的 messages，保持真实顺序。
-   规则：user/system/assistant 原样；连续 tool_call+tool_result 对 → 一条 assistant（带 tool_calls）+ 若干 role=tool（API 要求，否则 400）。"
+  "把 DB 里存的会话历史转成 LLM API 的 messages。存储与 API 一致：user/assistant（含 tool_calls）/tool，直接透传。"
   [history]
   (when (seq history)
-    (loop [acc [] i 0]
-      (if (>= i (count history))
-        acc
-        (let [msg (nth history i)
-              role (get msg :role "")]
-          (case role
-            "user"
-            (recur (conj acc (select-keys msg [:role :content])) (inc i))
-            "system"
-            (recur (conj acc (select-keys msg [:role :content])) (inc i))
-
-            "assistant"
-            (recur (conj acc (select-keys msg [:role :content])) (inc i))
-
-            "tool_call"
-            (let [pairs (atom [])
-                  j     (loop [k i]
-                          (if (and (< k (count history))
-                                   (= (get (nth history k) :role) "tool_call"))
-                            (let [tc (nth history k)
-                                  tr (when (< (inc k) (count history))
-                                       (nth history (inc k)))]
-                              (when (and tr (= (get tr :role) "tool_result"))
-                                (swap! pairs conj {:tool-call tc :tool-result tr}))
-                              (recur (+ k 2)))
-                            k))]
-              (if (seq @pairs)
-                (let [pairs-vec (vec @pairs)
-                      tool-calls (mapv (fn [idx pair]
-                                         (let [id (str "hist-" idx)
-                                               tc (:tool-call pair)
-                                               name (get tc :name "unknown")
-                                               code (get tc :content "")]
-                                           {:id id
-                                            :type "function"
-                                            :function {:name name
-                                                       :arguments (json/generate-string {:code code})}}))
-                                       (range (count pairs-vec)) pairs-vec)
-                      tool-msgs (mapv (fn [idx pair]
-                                        {:role "tool"
-                                         :tool_call_id (str "hist-" idx)
-                                         :content (get-in pair [:tool-result :content] "")})
-                                      (range (count pairs-vec)) pairs-vec)
-                      assistant-msg {:role "assistant"
-                                     :content ""
-                                     :tool_calls tool-calls}]
-                  (recur (into acc (into [assistant-msg] tool-msgs)) j))
-                (recur acc (inc i))))
-
-            ;; 未知 role 或 tool_result 单独出现（不应发生）则跳过
-            (recur acc (inc i))))))))
+    (mapv (fn [msg]
+            (case (get msg :role "")
+              "user"    (select-keys msg [:role :content])
+              "system"  (select-keys msg [:role :content])
+              "assistant" (cond-> {:role "assistant" :content (get msg :content "")}
+                            (seq (get msg :tool_calls)) (assoc :tool_calls (get msg :tool_calls)))
+              "tool"    (select-keys msg [:role :tool_call_id :content])
+              nil))
+          (filter (fn [m] (#{"user" "system" "assistant" "tool"} (get m :role ""))) history))))
 
 (defn- resolve-conversation-id
   "从 body 取 conversation_id（keyword 或 string），若为 uuid 则返回 UUID，否则 nil。"
@@ -244,21 +222,30 @@
       {:status 500 :body {"error" (str (.getMessage t))}})))
 
 (defn get-conversation-messages-handler
-  "GET /api/conversations/:id/messages：返回该会话主分支消息列表，供前端恢复展示。"
+  "GET /api/conversations/:id/messages：返回该会话主分支消息列表，供前端恢复展示。
+   Query ?raw=1 时返回完整 message 数据（含 tool_call/tool_result），便于调试。"
   [request]
   (let [conn    db/conn
         id-str  (get-in request [:path-params :id])
+        raw?    (get-in request [:query-params "raw"])
         conv-id (when id-str
                   (try (java.util.UUID/fromString id-str) (catch Exception _ nil)))]
     (if-not conv-id
       {:status 400 :body {:error "Invalid conversation id"}}
       (let [msgs (conversation/get-messages conn conv-id)]
         {:status 200
-         :body   (mapv (fn [m]
-                         {:id      (str (:id m))
-                          :role    (get m :role "")
-                          :content (get m :content "")})
-                       msgs)}))))
+         :body   (if raw?
+                   ;; 调试：完整数据，含 role=tool_call/tool_result
+                   (mapv (fn [m] (update m :id str)) msgs)
+                   (mapv (fn [m]
+                           (cond-> {:id      (str (:id m))
+                                    :role    (get m :role "")
+                                    :content (get m :content "")}
+                             (= (get m :role "") "tool")
+                             (assoc :tool_call_id (get m :tool_call_id ""))
+                             (and (= (get m :role "") "assistant") (seq (get m :tool_calls)))
+                             (assoc :tool_calls (get m :tool_calls))))
+                         msgs))}))))
 
 ;; ---------------------------------------------------------------------------
 ;; 路由与 Ring Handler
