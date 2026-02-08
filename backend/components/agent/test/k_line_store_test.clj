@@ -18,12 +18,22 @@
         (let [inner (:ok res)]
           (is (contains? inner :fields) ":ok 含 :fields")
           (is (contains? inner :items) ":ok 含 :items")
+          (is (#{:cache :tushare} (:source inner)) ":ok 含 :source 且为 :cache 或 :tushare")
           (is (vector? (:items inner)) ":items 为向量")
           (when (seq (:items inner))
             (is (<= (count (:items inner)) 5) "最多 count 条")
             (is (every? map? (:items inner)) "每条 item 为 map"))))
       (when (:error res)
         (is (string? (:error res)) ":error 为字符串")))))
+
+(deftest get-k-day-second-call-hits-cache
+  "同一参数连续调用两次，第二次应命中缓存（:source :cache）。"
+  (ensure-k-line-store-ready)
+  (let [res1 (k-line-store/get-k "000006.SZ" "日k" "20250205" 5)
+        res2 (k-line-store/get-k "000006.SZ" "日k" "20250205" 5)]
+    (is (:ok res1) "第一次成功")
+    (is (:ok res2) "第二次成功")
+    (is (= :cache (get-in res2 [:ok :source])) "第二次来自缓存")))
 
 (deftest get-k-day-default-count
   (ensure-k-line-store-ready)

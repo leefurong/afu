@@ -194,7 +194,8 @@
 
 (defn get-k
   "K 线统一入口。日 k：先读缓存 [start-d, end-d]，不够则向 Tushare 拉缺的区间并按日写入后再返回。
-   周 k/月 k：直接请求 Tushare。返回 {:ok {:fields _ :items _}} 或 {:error _}，items 最多 count 条（从起始日起），日期降序。"
+   周 k/月 k：直接请求 Tushare。返回 {:ok {:fields _ :items _ :source _}} 或 {:error _}；
+   :source 为 :cache（来自缓存）或 :tushare（来自接口），items 最多 count 条（从起始日起），日期降序。"
   ([stock-code dwmsy beg-date]
    (get-k stock-code dwmsy beg-date 20))
   ([stock-code dwmsy beg-date req-count]
@@ -219,7 +220,9 @@
                    cached (get-cached-range conn ts-code start-d end-d)
                    n     (count (:items cached))]
                (if (and cached (>= n n-max))
-                 {:ok (update cached :items #(vec (take n-max %)))}
+                 {:ok (-> cached
+                          (update :items #(vec (take n-max %)))
+                          (assoc :source :cache))}
                  (let [res (fetch-daily-from-tushare ts-code start-d end-d)]
                    (if (:error res)
                      res
@@ -228,8 +231,9 @@
                            items  (or (:items payload) [])]
                        (when (and conn (seq items))
                          (save-days! conn ts-code fields items))
-                       {:ok (assoc payload :items
-                                   (vec (rows->maps fields (take n-max items))))})))))
+                       {:ok (-> payload
+                                (assoc :items (vec (rows->maps fields (take n-max items))))
+                                (assoc :source :tushare))})))))
              :stk_weekly_monthly
              (let [res (fetch-weekly-monthly-from-tushare ts-code start-d end-d freq)]
                (if (:error res)
@@ -238,7 +242,9 @@
                        fields (get inner :fields)
                        items  (or (get inner :items) [])
                        taken  (take n-max items)]
-                   {:ok (assoc inner :items (vec (rows->maps fields taken)))})))
+                   {:ok (-> inner
+                            (assoc :items (vec (rows->maps fields taken)))
+                            (assoc :source :tushare))})))
              {:error "未知 K 线类型"})))))))
 
 ;; ---------------------------------------------------------------------------
