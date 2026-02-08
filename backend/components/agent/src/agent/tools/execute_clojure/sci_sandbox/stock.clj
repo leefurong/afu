@@ -112,25 +112,25 @@
           (range n))))
 
 (defn- row-date-str
-  "取 row 的 trade_date 并转为可比较的 YYYYMMDD 字符串。"
-  [row date-idx]
-  (str (nth row date-idx nil)))
+  "取 row（map，含 :trade_date）的 trade_date 并转为可比较的 YYYYMMDD 字符串。"
+  [row]
+  (str (get row :trade_date "")))
 
 (defn- ma-from-payload
-  "根据 get-k 的 :ok payload 计算 MA 并返回最后 back-days 天的 items。"
+  "根据 get-k 的 :ok payload 计算 MA 并返回最后 back-days 天的 items。payload :items 为 map 行。"
   [payload ma-days back-days till-date]
   (let [fields    (:fields payload)
         items-raw (or (:items payload) [])
         items-asc (vec (reverse items-raw))
-        date-idx  (field-index fields "trade_date")
-        close-idx (field-index fields "close")]
-    (if (or (nil? date-idx) (nil? close-idx))
+        has-date? (field-index fields "trade_date")
+        has-close? (field-index fields "close")]
+    (if (or (nil? has-date?) (nil? has-close?))
       {:error "K 线数据缺少 trade_date 或 close 字段"}
       (let [till-str   (if (str/blank? (str till-date))
-                         (row-date-str (peek items-asc) date-idx)
+                         (row-date-str (peek items-asc))
                          (str till-date))
             i-end      (last (keep-indexed (fn [i row]
-                                             (when (<= (compare (row-date-str row date-idx) till-str) 0) i))
+                                             (when (<= (compare (row-date-str row) till-str) 0) i))
                                            items-asc))
             slice-len  (+ (dec ma-days) back-days)
             i-start    (when (and (some? i-end) (>= i-end (dec slice-len)))
@@ -141,13 +141,13 @@
           (or (nil? slice) (< (count slice) ma-days))
           {:error (str "无法在截止日 " (or till-str till-date) " 前取到 " back-days " 天数据。")}
           :else
-          (let [closes    (mapv (fn [row] (parse-close (nth row close-idx nil))) slice)
+          (let [closes    (mapv (fn [row] (parse-close (:close row))) slice)
                 ma-vals   (simple-moving-average closes ma-days)
                 ma-kw     (keyword (str "ma" ma-days))
                 out-start (- (count slice) back-days)
                 out-items (mapv (fn [i]
                                  (let [row (nth slice i)
-                                       d   (nth row date-idx)
+                                       d   (:trade_date row)
                                        c   (nth closes i)
                                        m   (nth ma-vals i)]
                                    {:trade_date (str d) :close c ma-kw m}))

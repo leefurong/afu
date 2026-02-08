@@ -123,6 +123,17 @@
 (defn- row-date-str [row date-idx]
   (str (nth row date-idx "")))
 
+(defn- rows->maps
+  "将按 fields 顺序的向量行转为 map 行，key 为 keyword。"
+  [fields rows]
+  (mapv #(zipmap (map keyword fields) %) rows))
+
+(defn code+date-in-range?
+  "谓词：code+date 字符串 c 是否在 [lo, hi] 闭区间内。供 Datalog 查询使用，避免内联 [(>= (compare ?c ?lo) 0)] 时
+   Datomic 编译表达式子句对 ?c 做符号解析导致 Unable to resolve symbol: ?c。"
+  [c lo hi]
+  (and (>= (compare c lo) 0) (<= (compare c hi) 0)))
+
 (defn- get-cached-range
   "查询 [start-d, end-d] 内已缓存的日 k，按日期降序。返回 {:fields _ :items _} 或 nil。"
   [conn ts-code start-d end-d]
@@ -133,8 +144,7 @@
           hi (str prefix end-d)
           eids (d/q '[:find ?e :in $ ?lo ?hi
                       :where [?e :k-line-day/code+date ?c]
-                      [(>= (compare ?c ?lo) 0)]
-                      [(<= (compare ?c ?hi) 0)]]
+                      [(agent.tools.execute-clojure.sci-sandbox.k-line-store/code+date-in-range? ?c ?lo ?hi)]]
                     db lo hi)
           rows (mapv (fn [[eid]]
                        (edn/read-string (:k-line-day/row-edn (d/pull db [:k-line-day/row-edn] eid))))
@@ -144,8 +154,9 @@
         (let [fields (edn/read-string (:k-line-daily-fields/edn fields-edn))
               date-idx (field-index fields "trade_date")]
           (when date-idx
-            {:fields fields
-             :items  (vec (sort #(compare (row-date-str %2 date-idx) (row-date-str %1 date-idx)) rows))}))))))
+            (let [sorted (vec (sort #(compare (row-date-str %2 date-idx) (row-date-str %1 date-idx)) rows))]
+              {:fields fields
+               :items  (rows->maps fields sorted)})))))))
 
 (defn- ensure-fields! [conn fields]
   (when (and conn (seq fields))
@@ -186,8 +197,8 @@
    周 k/月 k：直接请求 Tushare。返回 {:ok {:fields _ :items _}} 或 {:error _}，items 最多 count 条（从起始日起），日期降序。"
   ([stock-code dwmsy beg-date]
    (get-k stock-code dwmsy beg-date 20))
-  ([stock-code dwmsy beg-date count]
-   (let [count (if (or (nil? count) (neg? (long count))) 20 (long count))
+  ([stock-code dwmsy beg-date req-count]
+   (let [n-max  (if (or (nil? req-count) (neg? (long req-count))) 20 (long req-count))
          [api-name freq] (dwmsy->api dwmsy)]
      (cond
        (= api-name :unsupported)
@@ -199,7 +210,7 @@
        :else
        (let [ts-code (normalize-ts-code (str stock-code))
              start-d (start-date-from-beg beg-date)
-             end-d   (end-date-from-beg-and-count beg-date count dwmsy)]
+             end-d   (end-date-from-beg-and-count beg-date n-max dwmsy)]
          (if (nil? start-d)
            {:error "起始日期格式须为 YYYYMMDD。"}
            (case api-name
@@ -207,8 +218,8 @@
              (let [conn @conn-atom
                    cached (get-cached-range conn ts-code start-d end-d)
                    n     (count (:items cached))]
-               (if (and cached (>= n count))
-                 {:ok (update cached :items #(vec (take count %)))}
+               (if (and cached (>= n n-max))
+                 {:ok (update cached :items #(vec (take n-max %)))}
                  (let [res (fetch-daily-from-tushare ts-code start-d end-d)]
                    (if (:error res)
                      res
@@ -217,15 +228,17 @@
                            items  (or (:items payload) [])]
                        (when (and conn (seq items))
                          (save-days! conn ts-code fields items))
-                       {:ok (update payload :items
-                                    #(vec (take count (or % []))))})))))
+                       {:ok (assoc payload :items
+                                   (vec (rows->maps fields (take n-max items))))})))))
              :stk_weekly_monthly
              (let [res (fetch-weekly-monthly-from-tushare ts-code start-d end-d freq)]
                (if (:error res)
                  res
-                 (let [items (get-in res [:ok :items])
-                       taken (take count (or items []))]
-                   {:ok (-> res :ok (assoc :items (vec taken)))})))
+                 (let [inner (:ok res)
+                       fields (get inner :fields)
+                       items  (or (get inner :items) [])
+                       taken  (take n-max items)]
+                   {:ok (assoc inner :items (vec (rows->maps fields taken)))})))
              {:error "未知 K 线类型"})))))))
 
 ;; ---------------------------------------------------------------------------
