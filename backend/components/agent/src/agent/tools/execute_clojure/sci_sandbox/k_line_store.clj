@@ -1,6 +1,7 @@
 (ns agent.tools.execute-clojure.sci-sandbox.k-line-store
   "K 线：日线 SQLite 缓存（按 (ts_code, trade_date) 连续区间，非交易日占位符 -1）；周k/月k 直连 Tushare。"
-  (:require [agent.tools.execute-clojure.sci-sandbox.tushare :as tushare]
+  (:require [agent.tools.execute-clojure.sci-sandbox.stock-list-store :as stock-list-store]
+            [agent.tools.execute-clojure.sci-sandbox.tushare :as tushare]
             [clojure.edn :as edn]
             [clojure.string :as str]
             [clojure.tools.logging :as log]
@@ -367,25 +368,23 @@
 ;; ---------------------------------------------------------------------------
 
 (defn do-daily-extend!
-  "对所有需要维护的股票：右边延展到今天；若无任何缓存则从一年前今天拉到今天。"
+  "使用 stock-list-store 全量代码，对每只股票右边延展到今天；无缓存则从一年前今天拉到今天。"
   []
-  (let [ds (get-ds)]
+  (let [ds (get-ds)
+        codes (stock-list-store/get-all-stock-codes)]
     (when ds
-      (let [today (effective-today-ymd)
-            one-year-ago (date-str (.minus (parse-ymd today) 365 ChronoUnit/DAYS))
-            ts-codes (jdbc/execute! ds ["SELECT DISTINCT ts_code FROM k_line_daily"] {:builder-fn rs/as-unqualified-lower-maps})
-            codes (mapv #(get % :ts_code) ts-codes)]
-        (if (empty? codes)
-          (log/info "[k-line-store] do-daily-extend! no stocks in cache, skip")
-          (do
-            (doseq [ts-code codes]
-              (let [bounds (cache-bounds ds ts-code)
-                    need-left (if bounds (:left bounds) one-year-ago)
-                    need-right today]
-                (when-let [res (extend-to-cover! ds ts-code need-left need-right)]
-                  (when (:error res)
-                    (log/warn "[k-line-store] do-daily-extend! failed for" ts-code (:error res))))))
-            (log/info "[k-line-store] do-daily-extend! done for" (count codes) "stocks")))))))
+      (if (empty? codes)
+        (log/info "[k-line-store] do-daily-extend! no ts-codes from stock-list-store, skip")
+        (let [today (effective-today-ymd)
+              one-year-ago (date-str (.minus (parse-ymd today) 365 ChronoUnit/DAYS))]
+          (doseq [ts-code codes]
+            (let [bounds (cache-bounds ds ts-code)
+                  need-left (if bounds (:left bounds) one-year-ago)
+                  need-right today]
+              (when-let [res (extend-to-cover! ds ts-code need-left need-right)]
+                (when (:error res)
+                  (log/warn "[k-line-store] do-daily-extend! failed for" ts-code (:error res))))))
+          (log/info "[k-line-store] do-daily-extend! done for" (count codes) "stocks"))))))
 
 (def ^:private cron-daily-midnight "0 0 * * * *")
 (def ^:private cronj-tick-ms 60000)
