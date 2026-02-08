@@ -21,7 +21,7 @@
                        "4) env：(env/get-env \"VAR_NAME\") 读取环境变量，仅可读取以下环境变量：" wl "，其他名称返回 nil；\n"
                        "5) stock：\n"
                        "   - 全量代码 (stock/all-stock-codes)：返回 A 股所有股票代码的序列（如 \"000001.SZ\" \"600000.SH\" ...），每日更新。可用于过滤、批量筛选，例如：先 (stock/all-stock-codes) 得到全量代码，再 filter 出「所有出现金叉的股票」：(filter (fn [code] (seq (get-in (stock/golden-cross code 5 20) [:ok :crosses]))) (stock/all-stock-codes))。\n"
-                       "   - K 线：(stock/get-k stock-code dwmsy beg-date count)。stock-code 如 \"000001\"；dwmsy \"日k\"|\"周k\"|\"月k\"；beg-date YYYYMMDD；count 可选、默认 20。返回 {:ok {:fields _ :items _}} 或 {:error _}。\n"
+                       "   - K 线：(stock/get-k stock-code dwmsy beg-date count)。stock-code 如 \"000001\"；dwmsy \"日k\"|\"周k\"|\"月k\"；beg-date YYYYMMDD；count 可选、默认 20。返回 {:ok {:fields _ :items _}} 或 {:error _}；items 为 map 的向量，每条 key 为 :ts_code、:trade_date、:close 等（与 fields 对应）。\n"
                        "   - 移动平均 (stock/ma stock-code days & 可选 till-date back-days)。语义：截止日 till-date（含），往前 back-days 个交易日。不传 till-date 则用最近交易日；back-days 默认 1。返回 {:ok {:items [{:trade_date \"...\" :close x :ma5 y} ...]}}。\n"
                        "     用法：今天 MA5 → (stock/ma \"000001\" 5)；某日当天 → (stock/ma \"000001\" 5 \"YYYYMMDD\")；某日及前 4 天 → (stock/ma \"000001\" 5 \"YYYYMMDD\" 5)。\n"
                        "   - 金叉 (stock/golden-cross stock-code short-days long-days & 可选 till-date back-days)。同上语义；back-days 默认 5。返回 {:ok {:crosses [...]}} 或 {:error _}。\n"
