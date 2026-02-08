@@ -7,7 +7,10 @@
         com.datomic/local {:mvn/version "1.0.291"}
         clj-http/clj-http {:mvn/version "3.13.0"}
         cheshire/cheshire {:mvn/version "5.13.0"}
-        im.chit/cronj     {:mvn/version "1.4.4"}}
+        im.chit/cronj     {:mvn/version "1.4.4"}
+        ;; K 线缓存：SQLite（测试用 :memory: 或临时文件，生产用文件路径；手写 SQL，next.jdbc）
+        com.github.seancorfield/next.jdbc {:mvn/version "1.3.909"}
+        org.xerial/sqlite-jdbc            {:mvn/version "3.46.1.0"}}
 
  :aliases {:test {:extra-deps {lambdaisland/kaocha {:mvn/version "1.91.1392"}}
                   :main-opts ["-m" "kaocha.runner"]}}}
