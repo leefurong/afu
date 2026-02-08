@@ -375,16 +375,17 @@
             one-year-ago (date-str (.minus (parse-ymd today) 365 ChronoUnit/DAYS))
             ts-codes (jdbc/execute! ds ["SELECT DISTINCT ts_code FROM k_line_daily"] {:builder-fn rs/as-unqualified-lower-maps})
             codes (mapv #(get % :ts_code) ts-codes)]
-        (when (empty? codes)
+        (if (empty? codes)
           (log/info "[k-line-store] do-daily-extend! no stocks in cache, skip")
-          (doseq [ts-code codes]
-            (let [bounds (cache-bounds ds ts-code)
-                  need-left (if bounds (:left bounds) one-year-ago)
-                  need-right today]
-              (when-let [res (extend-to-cover! ds ts-code need-left need-right)]
-                (when (:error res)
-                  (log/warn "[k-line-store] do-daily-extend! failed for" ts-code (:error res))))))
-        (log/info "[k-line-store] do-daily-extend! done for" (count codes) "stocks"))))))
+          (do
+            (doseq [ts-code codes]
+              (let [bounds (cache-bounds ds ts-code)
+                    need-left (if bounds (:left bounds) one-year-ago)
+                    need-right today]
+                (when-let [res (extend-to-cover! ds ts-code need-left need-right)]
+                  (when (:error res)
+                    (log/warn "[k-line-store] do-daily-extend! failed for" ts-code (:error res))))))
+            (log/info "[k-line-store] do-daily-extend! done for" (count codes) "stocks")))))))
 
 (def ^:private cron-daily-midnight "0 0 * * * *")
 (def ^:private cronj-tick-ms 60000)
