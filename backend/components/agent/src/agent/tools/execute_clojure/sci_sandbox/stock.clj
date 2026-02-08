@@ -1,15 +1,12 @@
 (ns agent.tools.execute-clojure.sci-sandbox.stock
-  "SCI 沙箱内可调用的 K 线数据：get-k，基于 Tushare。"
-  (:require [agent.tools.execute-clojure.sci-sandbox.env :as env]
-            [cheshire.core :as json]
-            [clj-http.client :as client]
+  "SCI 沙箱内可调用的 K 线数据：get-k 委托给 k-line-store；request-tushare-api 委托给 tushare。"
+  (:require [agent.tools.execute-clojure.sci-sandbox.k-line-store :as k-line-store]
+            [agent.tools.execute-clojure.sci-sandbox.tushare :as tushare]
             [clojure.string :as str])
   (:import (java.time LocalDate)
            (java.time.format DateTimeFormatter)
            (java.time.temporal ChronoUnit)))
 
-(def ^:private api-url "http://api.tushare.pro")
-(def ^:private timeout-ms 15000)
 (def ^:private basic-iso DateTimeFormatter/BASIC_ISO_DATE)
 
 (defn- parse-ymd
@@ -78,85 +75,21 @@
     (str/starts-with? (str s) "6") (str s ".SH")
     :else (str s ".SZ")))
 
-(defn- request-tushare
-  [token api-name params]
-  (let [body (json/generate-string {:api_name api-name
-                                    :token    token
-                                    :params   params})]
-    (try
-      (let [resp (client/post api-url
-                             {:body            body
-                              :content-type    :json
-                              :accept          :json
-                              :socket-timeout  timeout-ms
-                              :conn-timeout    timeout-ms})
-            data (json/parse-string (:body resp) true)]
-        (if (contains? data :code)
-          (let [code (long (:code data))]
-            (if (zero? code)
-              (let [inner (or (:data data) data)
-                    payload (-> (select-keys inner [:fields :items])
-                                (update-vals #(or % [])))
-                    items (:items payload)]
-                {:ok (assoc payload :items (or items []))})
-              {:error (str "Tushare 返回错误: " (or (:msg data) "未知") " (code=" code ")")}))
-          {:error "Tushare 返回格式异常"}))
-      (catch Exception e
-        {:error (str "请求 Tushare 失败: " (.getMessage e))}))))
-
 (defn request-tushare-api
-  "供其他 ns 调用的 Tushare 请求。api-name 为字符串，params 为 map。返回 {:ok {:fields _ :items _}} 或 {:error _}。"
+  "供其他 ns 调用的 Tushare 请求。委托给 tushare ns。"
   [api-name params]
-  (let [token (env/get-env "TUSHARE_API_TOKEN")]
-    (if (str/blank? token)
-      {:error "未配置 TUSHARE_API_TOKEN"}
-      (request-tushare token api-name params))))
-
-(defn get-k
-  "获取 K 线数据。
-   参数:
-   - stock-code: 股票代码，如 \"000001\" 或 \"000001.SZ\"
-   - dwmsy: K 线类型，\"日k\" \"周k\" \"月k\" \"季k\" \"年k\"（季k/年k 暂不支持）
-   - beg-date: 起始日期，格式 YYYYMMDD；若该日未开盘（如周末）则顺延到下一交易日
-   - count: 需要的 K 线条数，可选，默认 20；end_date 据此自动计算
-   返回 {:ok {:fields [...] :items [[...] ...]}} 或 {:error \"...\"}，items 最多 count 条（从起始日起）。"
-  ([stock-code dwmsy beg-date]
-   (get-k stock-code dwmsy beg-date 20))
-  ([stock-code dwmsy beg-date count]
-   (let [count (if (or (nil? count) (neg? (long count))) 20 (long count))
-         token (env/get-env "TUSHARE_API_TOKEN")]
-     (if (str/blank? token)
-       {:error "未配置 TUSHARE_API_TOKEN，请在环境中设置"}
-       (let [[api-name freq] (dwmsy->api dwmsy)]
-         (cond
-           (= api-name :unsupported)
-           {:error "暂不支持季k/年k，请使用 日k、周k 或 月k。"}
-
-           (not (parse-ymd beg-date))
-           {:error "起始日期格式须为 YYYYMMDD，例如 20250101。"}
-
-           :else
-           (let [ts-code   (normalize-ts-code (str stock-code))
-                 start-d   (start-date-from-beg beg-date)
-                 end-d     (end-date-from-beg-and-count beg-date count dwmsy)
-                 params    (cond-> {:ts_code    ts-code
-                                   :start_date start-d
-                                   :end_date   end-d}
-                            freq (assoc :freq freq))
-                 result    (request-tushare token (name api-name) params)]
-             (if (:error result)
-               result
-               (update result :ok
-                       (fn [payload]
-                         ;; Tushare 返回按日期降序；取「从起始日起」的 count 条，仍按日期降序返回
-                         (update payload :items
-                                 (fn [items]
-                                   (let [items (or items [])]
-                                     (reverse (take count (reverse items))))))))))))))))
+  (tushare/request-tushare-api api-name params))
 
 (defn- field-index
   [fields name]
   (first (keep-indexed (fn [i f] (when (= (str f) (str name)) i)) fields)))
+
+(defn get-k
+  "获取 K 线数据。完全委托给 k-line-store。"
+  ([stock-code dwmsy beg-date]
+   (get-k stock-code dwmsy beg-date 20))
+  ([stock-code dwmsy beg-date count]
+   (k-line-store/get-k stock-code dwmsy beg-date count)))
 
 (defn- parse-close
   [v]

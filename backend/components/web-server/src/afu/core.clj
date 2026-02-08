@@ -5,6 +5,7 @@
             [afu.nrepl-middleware :as nrepl-mw]
             [conversation :as conversation]
             [agentmanager :as agentmanager]
+            [agent.tools.execute-clojure.sci-sandbox.k-line-store :as k-line-store]
             [agent.tools.execute-clojure.sci-sandbox.stock-list-store :as stock-list-store]
             [ring.adapter.jetty :as jetty]))
 
@@ -22,6 +23,8 @@
    (conversation/ensure-schema! db/conn)
    (stock-list-store/ensure-schema! db/conn)
    (stock-list-store/init! db/conn)
+   (k-line-store/ensure-schema! db/conn)
+   (k-line-store/init! db/conn)
    (let [port (or (:port opts) default-port)
          app  (handler/app)
          jetty-opts (merge jetty-defaults {:port port :join? false} opts)]

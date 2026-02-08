@@ -1,6 +1,6 @@
 (ns agent.tools.execute-clojure.sci-sandbox.stock-list-store
   "A 股全量股票代码：从 Tushare 拉取并存入 Datomic。init! 时执行一次更新并启动 cronj 每日 0 点定时更新。"
-  (:require [agent.tools.execute-clojure.sci-sandbox.stock :as stock]
+  (:require [agent.tools.execute-clojure.sci-sandbox.tushare :as tushare]
             [clojure.edn :as edn]
             [clojure.tools.logging :as log]
             [cronj.core :as cronj]
@@ -103,7 +103,7 @@
   (first (keep-indexed (fn [i f] (when (= (str f) (str name)) i)) fields)))
 
 (defn- fetch-from-tushare []
-  (let [res (stock/request-tushare-api "stock_basic" {:list_status "L"})]
+  (let [res (tushare/request-tushare-api "stock_basic" {:list_status "L"})]
     (if (:error res)
       (do (log/warn "[stock-list-store] fetch-from-tushare failed:" (:error res))
           {:error (:error res)})
