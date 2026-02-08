@@ -91,12 +91,13 @@
                                   (let [result {:error (str "未知工具: " name)}]
                                     (when emit-fn (emit-fn :tool-result result))
                                     {:role "tool" :tool_call_id (get tc :id) :content (pr-str result)})
-                                  (let [result (tool-registry/handle tool args tool-ctx)]
+                                  (do
                                     (when emit-fn
                                       (emit-fn :tool-call (merge {:name name :arguments args}
-                                                                 (tool-registry/call-display tool args)))
-                                      (emit-fn :tool-result result))
-                                    {:role "tool" :tool_call_id (get tc :id) :content (pr-str result)}))))
+                                                                 (tool-registry/call-display tool args))))
+                                    (let [result (tool-registry/handle tool args tool-ctx)]
+                                      (when emit-fn (emit-fn :tool-result result))
+                                      {:role "tool" :tool_call_id (get tc :id) :content (pr-str result)})))))
                             (:tool_calls resp))
             next-msg (into (conj messages assistant-msg) tool-msgs)]
         (println "[agent] tool loop recur, next-msg count =" (count next-msg))
