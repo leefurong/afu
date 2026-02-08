@@ -116,6 +116,44 @@
   [row date-idx]
   (str (nth row date-idx nil)))
 
+(defn- ma-from-payload
+  "根据 get-k 的 :ok payload 计算 MA 并返回最后 back-days 天的 items。"
+  [payload ma-days back-days till-date]
+  (let [fields    (:fields payload)
+        items-raw (or (:items payload) [])
+        items-asc (vec (reverse items-raw))
+        date-idx  (field-index fields "trade_date")
+        close-idx (field-index fields "close")]
+    (if (or (nil? date-idx) (nil? close-idx))
+      {:error "K 线数据缺少 trade_date 或 close 字段"}
+      (let [till-str   (if (str/blank? (str till-date))
+                         (row-date-str (peek items-asc) date-idx)
+                         (str till-date))
+            i-end      (last (keep-indexed (fn [i row]
+                                             (when (<= (compare (row-date-str row date-idx) till-str) 0) i))
+                                           items-asc))
+            slice-len  (+ (dec ma-days) back-days)
+            i-start    (when (and (some? i-end) (>= i-end (dec slice-len)))
+                         (max 0 (- i-end slice-len -1)))
+            slice      (when (and (some? i-start) (some? i-end))
+                         (subvec items-asc i-start (inc i-end)))]
+        (cond
+          (or (nil? slice) (< (count slice) ma-days))
+          {:error (str "无法在截止日 " (or till-str till-date) " 前取到 " back-days " 天数据。")}
+          :else
+          (let [closes    (mapv (fn [row] (parse-close (nth row close-idx nil))) slice)
+                ma-vals   (simple-moving-average closes ma-days)
+                ma-kw     (keyword (str "ma" ma-days))
+                out-start (- (count slice) back-days)
+                out-items (mapv (fn [i]
+                                 (let [row (nth slice i)
+                                       d   (nth row date-idx)
+                                       c   (nth closes i)
+                                       m   (nth ma-vals i)]
+                                   {:trade_date (str d) :close c ma-kw m}))
+                               (vec (range out-start (count slice))))]
+            {:ok {:items out-items}}))))))
+
 (defn ma
   "计算日 K 收盘价的 N 日简单移动平均。语义：截止日 till-date，往前取 back-days 个交易日。
    - stock-code: 股票代码；days: MA 周期（如 5、10、20、60）。
@@ -134,11 +172,8 @@
        (< ma-days 2) {:error "MA 周期 days 至少为 2。"}
        (and till-date (not (parse-ymd till-date))) {:error "截止日格式须为 YYYYMMDD。"}
        :else
-       (let [;; 需要 (ma-days-1 + back-days) 根 K，且区间要覆盖到 till-date（或最近）
-             k-need    (+ (dec ma-days) back-days)
+       (let [k-need    (+ (dec ma-days) back-days)
              k-request (max 320 (+ k-need 150))
-             ;; 若未传 till-date：拉近期数据（today - 400 天）；若传了 till-date：从 till-date 往前 400 日历日拉，
-             ;; 保证约 320 根 K 能覆盖到 till-date（320*1.5 约 480 天 > 400），与「不传 till-date」时逻辑一致。
              start-d   (if till-date
                          (when-let [d (parse-ymd till-date)]
                            (date->str (minus-days (next-weekday d) 400)))
@@ -147,45 +182,7 @@
          (cond
            (:error k) k
            (nil? start-d) {:error "截止日格式须为 YYYYMMDD。"}
-           :else
-           (let [payload   (:ok k)
-                 fields    (:fields payload)
-                 items-raw (or (:items payload) [])
-                 items-asc (vec (reverse items-raw))
-                 date-idx  (field-index fields "trade_date")
-                 close-idx (field-index fields "close")]
-             (if (or (nil? date-idx) (nil? close-idx))
-               {:error "K 线数据缺少 trade_date 或 close 字段"}
-               (let [;; 确定截止日：若未传则用数据里最后一天（最近交易日）
-                     till-str   (if (str/blank? (str till-date))
-                                  (row-date-str (peek items-asc) date-idx)
-                                  (str till-date))
-                     ;; 最后一个 date <= till-str 的下标；若该日无数据则等价于向前取最近有数据的交易日，不报错
-                     i-end      (last (keep-indexed (fn [i row]
-                                                      (when (<= (compare (row-date-str row date-idx) till-str) 0) i))
-                                                    items-asc))
-                     slice-len  (+ (dec ma-days) back-days)
-                     i-start   (when (and (some? i-end) (>= i-end (dec slice-len)))
-                                 (max 0 (- i-end slice-len -1)))
-                     slice     (when (and (some? i-start) (some? i-end))
-                                 (subvec items-asc i-start (inc i-end)))]
-                 (cond
-                   (or (nil? slice) (< (count slice) ma-days))
-                   {:error (str "无法在截止日 " (or till-str till-date) " 前取到 " back-days " 天数据。")}
-                   :else
-                   (let [closes    (mapv (fn [row] (parse-close (nth row close-idx nil))) slice)
-                         ma-vals   (simple-moving-average closes ma-days)
-                         ma-kw     (keyword (str "ma" ma-days))
-                         ;; slice 前 (ma-days-1) 行为前置，最后 back-days 行为输出
-                         out-start (- (count slice) back-days)
-                         out-items (mapv (fn [i]
-                                           (let [row (nth slice i)
-                                                 d   (nth row date-idx)
-                                                 c   (nth closes i)
-                                                 m   (nth ma-vals i)]
-                                             {:trade_date (str d) :close c ma-kw m}))
-                                         (vec (range out-start (count slice))))]
-                     {:ok {:items out-items}})))))))))))
+           :else (ma-from-payload (:ok k) ma-days back-days till-date)))))))
 
 (defn golden-cross
   "检测短期均线上穿长期均线（金叉）。语义与 ma 一致：截止日 till-date，往前 back-days 天。
