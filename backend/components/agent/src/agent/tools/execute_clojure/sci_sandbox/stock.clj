@@ -104,6 +104,14 @@
       (catch Exception e
         {:error (str "请求 Tushare 失败: " (.getMessage e))}))))
 
+(defn request-tushare-api
+  "供其他 ns 调用的 Tushare 请求。api-name 为字符串，params 为 map。返回 {:ok {:fields _ :items _}} 或 {:error _}。"
+  [api-name params]
+  (let [token (env/get-env "TUSHARE_API_TOKEN")]
+    (if (str/blank? token)
+      {:error "未配置 TUSHARE_API_TOKEN"}
+      (request-tushare token api-name params))))
+
 (defn get-k
   "获取 K 线数据。
    参数:

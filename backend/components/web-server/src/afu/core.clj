@@ -2,10 +2,11 @@
   "Web 服务入口：启动 Jetty，挂载 afu.handler/app；可选启动 nREPL 供边运行边连。"
   (:require [afu.handler :as handler]
             [afu.db :as db]
+            [afu.nrepl-middleware :as nrepl-mw]
             [conversation :as conversation]
             [agentmanager :as agentmanager]
-            [ring.adapter.jetty :as jetty]
-            [nrepl.server :as nrepl]))
+            [agent.tools.execute-clojure.sci-sandbox.stock-list-store :as stock-list-store]
+            [ring.adapter.jetty :as jetty]))
 
 (def ^:private default-port 4000)
 
@@ -19,6 +20,8 @@
   ([opts]
    (agentmanager/ensure-schema! db/conn)
    (conversation/ensure-schema! db/conn)
+   (stock-list-store/ensure-schema! db/conn)
+   (stock-list-store/init! db/conn)
    (let [port (or (:port opts) default-port)
          app  (handler/app)
          jetty-opts (merge jetty-defaults {:port port :join? false} opts)]
@@ -27,12 +30,9 @@
 (def ^:private nrepl-port 7888)
 
 (defn start-nrepl!
-  "启动 nREPL，便于 Cursor/Calva 等边运行边连。端口写入 .nrepl-port。"
+  "启动 nREPL（默认 eval + eval-in-sci 同一套），便于 Cursor/Calva 与 sci-repl 共用。"
   []
-  (let [server (nrepl/start-server :port nrepl-port)]
-    (spit ".nrepl-port" (str nrepl-port))
-    (println "nREPL server on port" nrepl-port "(see .nrepl-port)")
-    server))
+  (nrepl-mw/start-nrepl! nrepl-port))
 
 (defn -main
   "供 clj -M:web-server 调用：启动 nREPL + Jetty。

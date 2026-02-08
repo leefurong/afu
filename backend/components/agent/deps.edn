@@ -6,7 +6,8 @@
         afu/sci-context-serde {:local/root "../sci-context-serde"}
         com.datomic/local {:mvn/version "1.0.291"}
         clj-http/clj-http {:mvn/version "3.13.0"}
-        cheshire/cheshire {:mvn/version "5.13.0"}}
+        cheshire/cheshire {:mvn/version "5.13.0"}
+        im.chit/cronj     {:mvn/version "1.4.4"}}
 
  :aliases {:test {:extra-deps {lambdaisland/kaocha {:mvn/version "1.91.1392"}}
                   :main-opts ["-m" "kaocha.runner"]}}}

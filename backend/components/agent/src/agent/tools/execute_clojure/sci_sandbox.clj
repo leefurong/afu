@@ -4,6 +4,7 @@
             [agent.tools.execute-clojure.sci-sandbox.http :as http]
             [agent.tools.execute-clojure.sci-sandbox.json :as json]
             [agent.tools.execute-clojure.sci-sandbox.stock :as stock]
+            [agent.tools.execute-clojure.sci-sandbox.stock-list-store :as stock-list-store]
             [clojure.pprint :as pprint]))
 
 (def env-whitelist
@@ -18,7 +19,8 @@
    'json   {'parse-string json/parse-string
             'write-str    json/write-str}
    'env    {'get-env env/get-env}
-   'stock  {'get-k        stock/get-k
-            'ma           stock/ma
-            'golden-cross stock/golden-cross}
+   'stock  {'get-k           stock/get-k
+            'ma              stock/ma
+            'golden-cross    stock/golden-cross
+            'all-stock-codes (fn [] (stock-list-store/get-all-stock-codes))}
    'pprint {'pprint pprint/pprint}})
