@@ -1,5 +1,5 @@
 (ns agent.tools.execute-clojure.sci-sandbox.stock
-  "SCI 沙箱内可调用的 K 线数据：get-k 委托给 k-line-store；request-tushare-api 委托给 tushare。"
+  "SCI 沙箱内可调用的 K 线数据：日k 委托给 k-line-store；request-tushare-api 委托给 tushare。"
   (:require [agent.tools.execute-clojure.sci-sandbox.k-line-store :as k-line-store]
             [agent.tools.execute-clojure.sci-sandbox.tushare :as tushare]
             [clojure.string :as str])
@@ -85,7 +85,7 @@
   (first (keep-indexed (fn [i f] (when (= (str f) (str name)) i)) fields)))
 
 (defn get-k
-  "获取 K 线数据。完全委托给 k-line-store。"
+  "获取 K 线数据。日k 走 k-line-store 缓存，周k/月k 直连 Tushare，接口不变。"
   ([stock-code dwmsy beg-date]
    (get-k stock-code dwmsy beg-date 20))
   ([stock-code dwmsy beg-date count]

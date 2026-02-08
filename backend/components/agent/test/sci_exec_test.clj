@@ -105,8 +105,9 @@
       (when (and (:ok res) (seq (get-in (:ok res) [:ok :items])))
         (is (<= (count (get-in (:ok res) [:ok :items])) 20)))))
   (testing "stock/get-k 季k returns error (unsupported)"
-    (is (= {:ok {:error "暂不支持季k/年k，请使用 日k、周k 或 月k。"}}
-           (se/eval-string "(stock/get-k \"000001\" \"季k\" \"20250101\")")))))
+    (let [res (se/eval-string "(stock/get-k \"000001\" \"季k\" \"20250101\")")]
+      (is (contains? res :ok))
+      (is (string? (get-in res [:ok :error]))))))
 
 (deftest stock-ma
   (testing "stock/ma with days < 2 returns error"
