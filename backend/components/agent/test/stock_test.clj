@@ -96,10 +96,10 @@
             (let [c (first crosses)]
               (is (= expected-golden-cross-date (str (:date c)))
                   (str "金叉日期应为 " expected-golden-cross-date))
-              (is (approx= expected-golden-cross-short-ma (:short_ma c) 0.01)
-                  (str "short_ma 应为 " expected-golden-cross-short-ma))
-              (is (approx= expected-golden-cross-long-ma (:long_ma c) 0.01)
-                  (str "long_ma 应为 " expected-golden-cross-long-ma)))))))))
+              (is (approx= expected-golden-cross-short-ma (:ma5 c) 0.01)
+                  (str "ma5 应为 " expected-golden-cross-short-ma))
+              (is (approx= expected-golden-cross-long-ma (:ma20 c) 0.01)
+                  (str "ma20 应为 " expected-golden-cross-long-ma)))))))))
 
 (deftest ma-period-validation
   (setup-fixture! "000001.SZ")

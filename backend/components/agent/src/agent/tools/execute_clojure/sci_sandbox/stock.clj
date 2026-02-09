@@ -74,9 +74,9 @@
           {:error "K 线缓存未初始化"}
           {:ok {:fields default-daily-fields
                 :by_ts_code (into {}
-                                 (map (fn [[code items]]
-                                        [code (mapv #(update % :trade_date str) items)])
-                                      (group-by :ts_code rows)))}})))))
+                                  (map (fn [[code items]]
+                                         [code (mapv #(update % :trade_date str) items)])
+                                       (group-by :ts_code rows)))}})))))
 
 (defn- field-index
   [fields name]
@@ -140,16 +140,16 @@
                     ma-vals  (simple-moving-average closes ma-days)
                     ma-kw    (keyword (str "ma" ma-days))
                     out-items (into []
-                                   (keep-indexed (fn [i row]
-                                                   (let [d (row-date-str row)
-                                                         m (nth ma-vals i)]
-                                                     (when (and (number? m)
+                                    (keep-indexed (fn [i row]
+                                                    (let [d (row-date-str row)
+                                                          m (nth ma-vals i)]
+                                                      (when (and (number? m)
                                                                  (>= (compare d from-str) 0)
                                                                  (<= (compare d to-str) 0))
-                                                       {:trade_date (str (:trade_date row))
-                                                        :close     (nth closes i)
-                                                        ma-kw      m})))
-                                   slice-asc))]
+                                                        {:trade_date (str (:trade_date row))
+                                                         :close     (nth closes i)
+                                                         ma-kw      m})))
+                                                  slice-asc))]
                 {:ok {:items out-items}}))))))))
 
 (defn ma-for-multiple-stocks
@@ -183,7 +183,7 @@
                                                  :items  (mapv #(update % :trade_date str) rows)}
                                         res    (ma-from-payload-by-range payload ma-days from-str to-str)]
                                     [code res]))
-                               ts-codes)
+                                ts-codes)
                  first-err (first (keep (fn [[_code res]] (when (:error res) res)) results))]
              (if first-err
                first-err
@@ -192,7 +192,7 @@
    (ma-for-multiple-stocks stock-codes period (str date) (str date))))
 
 (defn- crosses-from-ma-items
-  "根据短期、长期 MA 的 items（均按 trade_date 升序）检测金叉，返回 [{:date _ :short_ma _ :long_ma _} ...]。"
+  "根据短期、长期 MA 的 items（均按 trade_date 升序）检测金叉，返回 [{:date _ :ma5 _ :ma20 _} ...]（key 为 ma{short-period}, ma{long-period}）。"
   [short-items long-items short-period long-period]
   (let [skw (keyword (str "ma" short-period))
         lkw (keyword (str "ma" long-period))
@@ -209,7 +209,7 @@
                           d     (:trade_date (nth short-items i))]
                       (when (and (number? prev-s) (number? prev-l) (number? curr-s) (number? curr-l)
                                  (<= prev-s prev-l) (> curr-s curr-l))
-                        {:date d :short_ma curr-s :long_ma curr-l}))))
+                        (assoc {:date d} skw curr-s lkw curr-l)))))
              (filter some?))
             (range 1 n)))))
 
@@ -242,9 +242,9 @@
           (let [short-by (get-in ma-short [:ok :by_ts_code])
                 long-by  (get-in ma-long [:ok :by_ts_code])
                 by-code  (map (fn [code]
-                               [code {:crosses (crosses-from-ma-items
-                                                (or (get-in short-by [code :items]) [])
-                                                (or (get-in long-by [code :items]) [])
-                                                short-period long-period)}])
-                             ts-codes)]
+                                [code {:crosses (crosses-from-ma-items
+                                                 (or (get-in short-by [code :items]) [])
+                                                 (or (get-in long-by [code :items]) [])
+                                                 short-period long-period)}])
+                              ts-codes)]
             {:ok {:by_ts_code (into {} by-code)}}))))))
