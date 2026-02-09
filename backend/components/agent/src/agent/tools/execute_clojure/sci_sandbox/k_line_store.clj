@@ -45,6 +45,9 @@
 (def ^:private datasource-atom (atom nil))
 (def ^:private scheduler-atom (atom nil))
 
+(declare normalize-ts-code)
+(declare update-ma-for-stock-date-range!)
+
 (defn reset-for-test!
   "仅用于测试：清空 datasource 与 scheduler，便于使用 :memory: 重新初始化。"
   []
@@ -85,6 +88,14 @@
          CREATE INDEX IF NOT EXISTS idx_k_line_daily_ts_code_trade_date
          ON k_line_daily (ts_code, trade_date)
        "])
+       ;; 迁移：添加 cross_type 列与索引（便于按金叉/死叉快速检索）
+       (let [info (jdbc/execute! db ["PRAGMA table_info(k_line_daily)"]
+                                {:builder-fn rs/as-unqualified-lower-maps})
+             has-cross-type? (some #(= "cross_type" (get % :name)) info)]
+         (when-not has-cross-type?
+           (jdbc/execute! db ["ALTER TABLE k_line_daily ADD COLUMN cross_type TEXT"])
+           (jdbc/execute! db ["CREATE INDEX IF NOT EXISTS idx_k_line_daily_cross_type ON k_line_daily(cross_type)"])
+           (log/info "[k-line-store] ensure-schema! added column cross_type and index")))
        (log/info "[k-line-store] ensure-schema! SQLite ready:" jdbc-url))))))
 
 (defn- get-ds []
@@ -154,13 +165,21 @@
             right (get r :right_d)]
         (when (and left right) {:left left :right right})))))
 
-(defn- insert-rows! [ds ts-code date-rows]
+(defn- insert-rows!
+  "按 (trade_date, payload) 逐行 INSERT OR REPLACE，非单事务；每次调用写一个区间的数据。"
+  [ds ts-code date-rows]
   (doseq [[trade-date payload] date-rows]
     (jdbc/execute! ds
       ["INSERT OR REPLACE INTO k_line_daily (ts_code, trade_date, row_payload) VALUES (?, ?, ?)"
        ts-code trade-date (if (= payload placeholder) (str placeholder) (pr-str payload))])))
 
-
+(defn update-daily-row-mas!
+  "更新单行：将 row_payload 置为 payload-map 的 pr-str，cross_type 置为 cross-type-str。"
+  [ts-code trade-date payload-map cross-type-str]
+  (when-let [ds (get-ds)]
+    (jdbc/execute! ds
+      ["UPDATE k_line_daily SET row_payload = ?, cross_type = ? WHERE ts_code = ? AND trade_date = ?"
+       (pr-str payload-map) (str cross-type-str) (normalize-ts-code ts-code) (str trade-date)])))
 
 ;; ---------------------------------------------------------------------------
 ;; Tushare 拉取与写入
@@ -212,7 +231,8 @@
           {:error "Tushare 日线返回缺少 trade_date 或无法解析"})))))
 
 (defn- extend-to-cover!
-  "拓展缓存以覆盖 [need-left, need-right]。只请求未覆盖的区间并写入。"
+  "拓展缓存以覆盖 [need-left, need-right]。按未覆盖区间顺序逐段请求 Tushare 并 insert-rows!；
+   每段独立写入，整只股票写完需本函数返回后。MA 异步在「本只股票全部写完」后触发（do-daily-extend! 内）。"
   [ds ts-code need-left need-right]
   (let [bounds (cache-bounds ds ts-code)
         ranges (uncovered-date-ranges (:left bounds) (:right bounds) need-left need-right)]
@@ -267,7 +287,7 @@
 
 (defn- get-daily-k-from-tushare
   "Private. 单只股票 [date-from, date-to] 从 Tushare 拉取并合并到 DB，返回该区间行（含占位符），:source :tushare。
-   date-from > date-to 时返回空序列。"
+   date-from > date-to 时返回空序列。写入后异步触发该区间的 MA/金叉死叉计算并写回。"
   [code date-from date-to]
   (if (pos? (compare date-from date-to))
     []
@@ -277,8 +297,11 @@
         (let [res (extend-cache-with-range! ds code date-from date-to)]
           (if (:error res)
             []
-            (->> (read-daily-k-range-including-placeholders ds code date-from date-to)
-                 (map #(assoc % :source :tushare)))))))))
+            (do (let [bounds-after   (cache-bounds ds (normalize-ts-code code))
+                      extended-left? (and bounds-after (= (:left bounds-after) date-from))]
+                  (future (update-ma-for-stock-date-range! code date-from date-to extended-left?)))
+                (->> (read-daily-k-range-including-placeholders ds code date-from date-to)
+                     (map #(assoc % :source :tushare))))))))))
 
 (defn- ensure-daily-k
   "Private. daily-k-rows 为 get-daily-k-in-cache 对该 code 的返回值（已按 trade_date 升序，由 SQL ORDER BY 保证）。
@@ -307,7 +330,7 @@
   "Public. 先按 codes + date-from + date-to 批量从缓存取数，再对每个 code 用 ensure-daily-k 补全左右缺段，合并后排除非交易日返回。"
   [codes date-from date-to]
   (when (seq codes)
-    (when-let [ds (get-ds)]
+    (when-let [_ds (get-ds)]
       (let [all-cache (get-daily-k-in-cache codes date-from date-to)
             by-code (group-by :ts_code all-cache)
             normalized (map #(normalize-ts-code %) codes)
@@ -321,6 +344,25 @@
   [ts-code]
   (when-let [ds (get-ds)]
     (cache-bounds ds (normalize-ts-code ts-code))))
+
+(defn get-all-ts-codes-in-cache
+  "返回缓存中所有出现过的 ts_code（去重）。供 add-ma-to-cache 等脚本使用。"
+  []
+  (when-let [ds (get-ds)]
+    (let [rows (jdbc/execute! ds ["SELECT DISTINCT ts_code FROM k_line_daily ORDER BY ts_code"]
+                             {:builder-fn rs/as-unqualified-lower-maps})]
+      (mapv :ts_code rows))))
+
+(defn get-cached-rows-for-code
+  "仅从缓存读取某只股票在 [left, right] 内的有效 K 线（payload 非占位符），按 trade_date 升序。"
+  [ts-code left right]
+  (when-let [ds (get-ds)]
+    (let [code (normalize-ts-code ts-code)
+          rows (jdbc/execute! ds
+                 ["SELECT trade_date, row_payload FROM k_line_daily WHERE ts_code = ? AND trade_date >= ? AND trade_date <= ? AND row_payload != ? ORDER BY trade_date ASC"
+                  code (str left) (str right) (str placeholder)]
+                 {:builder-fn rs/as-unqualified-lower-maps})]
+      (mapv (fn [r] (row-payload->map code (get r :trade_date) (get r :row_payload) :cache)) rows))))
 
 (defn count-calendar-days-in-range
   "返回 [start-ymd, end-ymd] 闭区间内的日历天数。供测试/调试。"
@@ -344,6 +386,87 @@
     (insert-rows! ds (normalize-ts-code ts-code) date-rows)))
 
 ;; ---------------------------------------------------------------------------
+;; MA / 金叉死叉 区间更新（供异步触发）
+;; ---------------------------------------------------------------------------
+
+(defn- parse-close [v]
+  (cond
+    (number? v) (double v)
+    (string? v) (try (Double/parseDouble v) (catch NumberFormatException _ nil))
+    :else nil))
+
+(defn- simple-moving-average [closes days]
+  (let [n (count closes)
+        d (long days)]
+    (mapv (fn [i]
+            (if (< i (dec d))
+              nil
+              (let [seg (subvec closes (inc (- i d)) (inc i))
+                    s (reduce + 0.0 seg)]
+                (/ s d))))
+          (range n))))
+
+(defn- cross-type-at [ma-short ma-long i]
+  (if (< i 1)
+    "无"
+    (let [prev-s (nth ma-short (dec i))
+          prev-l (nth ma-long (dec i))
+          curr-s (nth ma-short i)
+          curr-l (nth ma-long i)]
+      (if (or (nil? prev-s) (nil? prev-l) (nil? curr-s) (nil? curr-l))
+        "无"
+        (cond
+          (and (<= prev-s prev-l) (> curr-s curr-l)) "金叉"
+          (and (>= prev-s prev-l) (< curr-s curr-l)) "死叉"
+          :else "无")))))
+
+(defn- payload-for-db [row]
+  (dissoc row :ts_code :trade_date :source))
+
+(defn update-ma-for-stock-date-range!
+  "对 ts-code 在 [date-from, date-to] 内的缓存行计算 MA5/10/20/30/60 与金叉/死叉并写回。
+   extended-left? 为 true 时，date-to 扩展为 min(今日, date-from 起第 60 个交易日)，因补左边后最多需 59 个交易日才有 MA60。"
+  [ts-code date-from date-to extended-left?]
+  (when-let [bounds (get-cache-bounds ts-code)]
+    (let [today (effective-today-ymd)
+          left  (:left bounds)
+          right (:right bounds)
+          date-to-ma (if extended-left?
+                       (let [rows (get-cached-rows-for-code ts-code left right)
+                             td-dates (mapv :trade_date rows)
+                             from-idx (first (keep-indexed (fn [i d] (when (<= (compare date-from d) 0) i)) td-dates))]
+                         (if (and (number? from-idx) (<= (+ from-idx 60) (count td-dates)))
+                           (min today (nth td-dates (+ from-idx 59)))
+                           today))
+                       date-to)
+          date-to-ma (or date-to-ma date-to)
+          rows (get-cached-rows-for-code ts-code left date-to-ma)]
+      (when (seq rows)
+        (let [rows-v    (vec rows)
+              closes   (mapv (fn [r] (parse-close (:close r))) rows-v)
+              ma5      (simple-moving-average closes 5)
+              ma20     (simple-moving-average closes 20)
+              ma10     (simple-moving-average closes 10)
+              ma30     (simple-moving-average closes 30)
+              ma60     (simple-moving-average closes 60)
+              date-from (str date-from)
+              date-to-ma (str date-to-ma)]
+          (doseq [i (range (count rows-v))]
+            (let [row (nth rows-v i)
+                  d   (str (:trade_date row))]
+              (when (and (<= (compare date-from d) 0) (<= (compare d date-to-ma) 0))
+                (let [ct (cross-type-at ma5 ma20 i)
+                      enriched (assoc row
+                                     :ma5 (nth ma5 i)
+                                     :ma10 (nth ma10 i)
+                                     :ma20 (nth ma20 i)
+                                     :ma30 (nth ma30 i)
+                                     :ma60 (nth ma60 i)
+                                     :cross_type ct)
+                      payload (payload-for-db enriched)]
+                  (update-daily-row-mas! ts-code d payload ct))))))))))
+
+;; ---------------------------------------------------------------------------
 ;; Cron：每日拓展
 ;; ---------------------------------------------------------------------------
 
@@ -364,12 +487,14 @@
           (println "[k-line-store] do-daily-extend! start, extending" total "stocks (Ctrl+C 或 REPL 里「Interrupt」可中断)")
           (flush)
           (doseq [[i ts-code] (map-indexed vector codes)]
-            (let [bounds (cache-bounds ds ts-code)
-                  need-left (if bounds (:left bounds) one-year-ago)
-                  need-right today]
-              (when-let [res (extend-to-cover! ds ts-code need-left need-right)]
-                (when (:error res)
-                  (log/warn "[k-line-store] do-daily-extend! failed for" ts-code (:error res)))))
+            (let [bounds     (cache-bounds ds ts-code)
+                  need-left  (if bounds (:left bounds) one-year-ago)
+                  need-right today
+                  res        (extend-to-cover! ds ts-code need-left need-right)]
+              (when (:error res)
+                (log/warn "[k-line-store] do-daily-extend! failed for" ts-code (:error res)))
+              (when-not (:error res)
+                (future (update-ma-for-stock-date-range! ts-code need-left need-right (nil? bounds)))))
             (when (and (pos? progress-log-interval)
                        (zero? (mod (inc i) progress-log-interval)))
               (let [msg (str "[k-line-store] do-daily-extend! progress " (inc i) " / " total)]
