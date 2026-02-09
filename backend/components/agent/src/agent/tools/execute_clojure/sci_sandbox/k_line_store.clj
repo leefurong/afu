@@ -18,7 +18,6 @@
 ;; ---------------------------------------------------------------------------
 
 (def ^:private placeholder -1)
-(def ^:private placeholder-str (str placeholder))
 (def ^:private basic-iso (DateTimeFormatter/ofPattern "yyyyMMdd"))
 
 (def ^:private shanghai-zone (ZoneId/of "Asia/Shanghai"))
@@ -35,8 +34,6 @@
       (.format (.minus today 1 ChronoUnit/DAYS) basic-iso)
       (.format today basic-iso))))
 
-(defn- today-ymd []
-  (.format (LocalDate/now) basic-iso))
 
 (defn- db-path []
   (or (System/getenv "K_LINE_DB_PATH")
@@ -160,10 +157,6 @@
 ;; 数据库读写
 ;; ---------------------------------------------------------------------------
 
-(defn- row-placeholder? [row-payload]
-  (try
-    (= placeholder (edn/read-string row-payload))
-    (catch Exception _ false)))
 
 (defn- cache-bounds [ds ts-code]
   (let [rows (jdbc/execute! ds
@@ -180,26 +173,7 @@
       ["INSERT OR REPLACE INTO k_line_daily (ts_code, trade_date, row_payload) VALUES (?, ?, ?)"
        ts-code trade-date (if (= payload placeholder) (str placeholder) (pr-str payload))])))
 
-(defn- rows-from-cache
-  "从 start-ymd 起按日期升序取行，跳过占位符，最多取 n-max 条有数据的行。返回 [{:trade_date _ ...} ...] 按日期升序。"
-  [ds ts-code start-ymd n-max]
-  (let [rows (jdbc/execute! ds
-                ["SELECT trade_date, row_payload FROM k_line_daily WHERE ts_code = ? AND trade_date >= ? AND row_payload != ? ORDER BY trade_date ASC LIMIT ?"
-                 ts-code start-ymd placeholder-str n-max]
-                {:builder-fn rs/as-unqualified-lower-maps})]
-    (map (fn [r]
-           (let [p (edn/read-string (get r :row_payload))]
-             (assoc (or p {}) :trade_date (get r :trade_date))))
-         rows)))
 
-(defn- count-real-from
-  "从 start-ymd 起按日期升序，统计非占位符的行数。"
-  [ds ts-code start-ymd]
-  (let [res (jdbc/execute! ds
-               ["SELECT COUNT(*) AS cnt FROM k_line_daily WHERE ts_code = ? AND trade_date >= ? AND row_payload != ?"
-                ts-code start-ymd placeholder-str]
-               {:builder-fn rs/as-unqualified-lower-maps})]
-    (long (get (first res) :cnt 0))))
 
 ;; ---------------------------------------------------------------------------
 ;; Tushare 拉取与写入
