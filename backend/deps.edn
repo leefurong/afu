@@ -13,5 +13,7 @@
                                     nrepl/nrepl             {:mvn/version "1.3.1"}}
                       :main-opts ["-m" "afu.core"]}
 
-          ;; 与 web-server 同 classpath，但不启服；供服务器运行时，访问内部状态便于调试
+          ;; 与 web-server 同 classpath。要访问服务器内部状态（如 stock-list-store/get-all-stock-codes），
+          ;; 需在编辑器中「Connect to REPL」连到已运行的 web-server nREPL（7888），代码在服务器进程内执行；
+          ;; 单独在终端执行 clj -M:repl 只会起本地 REPL，与 server 非同一进程。
           :repl {:extra-deps {org.slf4j/slf4j-simple {:mvn/version "2.0.9"}}}}}

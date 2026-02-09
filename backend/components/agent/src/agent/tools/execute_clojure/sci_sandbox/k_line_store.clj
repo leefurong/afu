@@ -367,6 +367,8 @@
 ;; Cron：每日拓展
 ;; ---------------------------------------------------------------------------
 
+(def ^:private progress-log-interval 100)
+
 (defn do-daily-extend!
   "使用 stock-list-store 全量代码，对每只股票右边延展到今天；无缓存则从一年前今天拉到今天。"
   []
@@ -375,16 +377,28 @@
     (when ds
       (if (empty? codes)
         (log/info "[k-line-store] do-daily-extend! no ts-codes from stock-list-store, skip")
-        (let [today (effective-today-ymd)
+        (let [total (count codes)
+              today (effective-today-ymd)
               one-year-ago (date-str (.minus (parse-ymd today) 365 ChronoUnit/DAYS))]
-          (doseq [ts-code codes]
+          (log/info "[k-line-store] do-daily-extend! start, extending" total "stocks")
+          (println "[k-line-store] do-daily-extend! start, extending" total "stocks (Ctrl+C 或 REPL 里「Interrupt」可中断)")
+          (flush)
+          (doseq [[i ts-code] (map-indexed vector codes)]
             (let [bounds (cache-bounds ds ts-code)
                   need-left (if bounds (:left bounds) one-year-ago)
                   need-right today]
               (when-let [res (extend-to-cover! ds ts-code need-left need-right)]
                 (when (:error res)
-                  (log/warn "[k-line-store] do-daily-extend! failed for" ts-code (:error res))))))
-          (log/info "[k-line-store] do-daily-extend! done for" (count codes) "stocks"))))))
+                  (log/warn "[k-line-store] do-daily-extend! failed for" ts-code (:error res)))))
+            (when (and (pos? progress-log-interval)
+                       (zero? (mod (inc i) progress-log-interval)))
+              (let [msg (str "[k-line-store] do-daily-extend! progress " (inc i) " / " total)]
+                (log/info msg)
+                (println msg)
+                (flush))))
+          (log/info "[k-line-store] do-daily-extend! done for" total "stocks")
+          (println "[k-line-store] do-daily-extend! done for" total "stocks")
+          (flush))))))
 
 (def ^:private cron-daily-midnight "0 0 * * * *")
 (def ^:private cronj-tick-ms 60000)
