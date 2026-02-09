@@ -150,15 +150,15 @@
 
 (deftest stock-ma-for-multiple-stocks
   (testing "ma-for-multiple-stocks empty codes returns error"
-    (let [res (se/eval-string "(stock/ma-for-multiple-stocks [] 5)")]
+    (let [res (se/eval-string "(stock/ma-for-multiple-stocks [] 5 \"20250101\" \"20250110\")")]
       (is (contains? res :ok))
       (is (= {:error "至少需要一只股票代码。"} (get-in res [:ok])))))
   (testing "ma-for-multiple-stocks period < 2 returns error"
-    (let [res (se/eval-string "(stock/ma-for-multiple-stocks [\"000001\"] 1)")]
+    (let [res (se/eval-string "(stock/ma-for-multiple-stocks [\"000001\"] 1 \"20250101\" \"20250110\")")]
       (is (contains? res :ok))
       (is (= {:error "MA 周期至少为 2。"} (get-in res [:ok])))))
   (testing "ma-for-multiple-stocks returns :ok with :by_ts_code when data available"
-    (let [res (se/eval-string "(stock/ma-for-multiple-stocks [\"000001\" \"000002\"] 5 \"20250101\" 2)")]
+    (let [res (se/eval-string "(stock/ma-for-multiple-stocks [\"000001\" \"000002\"] 5 \"20250101\" \"20250110\")")]
       (is (contains? res :ok))
       (let [inner (get res :ok)]
         (when (contains? inner :ok)

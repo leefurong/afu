@@ -158,6 +158,49 @@
                                (vec (range out-start (count slice))))]
             {:ok {:items out-items}}))))))
 
+(defn- ma-from-payload-by-range
+  "根据 get-k 的 :ok payload 计算 MA，仅返回 [date-from, date-to] 区间内（含）每个交易日的 items。
+   payload :items 为 map 行；区间为闭区间，日期 YYYYMMDD 字符串。"
+  [payload ma-days date-from date-to]
+  (let [fields    (:fields payload)
+        items-raw (or (:items payload) [])
+        items-asc (vec (reverse items-raw))
+        has-date? (field-index fields "trade_date")
+        has-close? (field-index fields "close")
+        from-str   (str date-from)
+        to-str     (str date-to)]
+    (if (or (nil? has-date?) (nil? has-close?))
+      {:error "K 线数据缺少 trade_date 或 close 字段"}
+      (let [i-date-from (first (keep-indexed (fn [i row]
+                                               (when (>= (compare (row-date-str row) from-str) 0) i))
+                                             items-asc))
+            i-end       (last (keep-indexed (fn [i row]
+                                              (when (<= (compare (row-date-str row) to-str) 0) i))
+                                            items-asc))]
+        (cond
+          (or (nil? i-date-from) (nil? i-end) (> i-date-from i-end))
+          {:ok {:items []}}
+          :else
+          (let [i-start   (max 0 (- i-date-from (dec ma-days)))
+                slice     (subvec items-asc i-start (inc i-end))]
+            (if (< (count slice) ma-days)
+              {:error (str "无法在 " from-str " 前取到足够 " ma-days " 日数据以计算 MA。")}
+              (let [closes   (mapv (fn [row] (parse-close (:close row))) slice)
+                    ma-vals  (simple-moving-average closes ma-days)
+                    ma-kw    (keyword (str "ma" ma-days))
+                    out-items (into []
+                                   (keep-indexed (fn [i row]
+                                                   (let [d (row-date-str row)
+                                                         m (nth ma-vals i)]
+                                                     (when (and (number? m)
+                                                                 (>= (compare d from-str) 0)
+                                                                 (<= (compare d to-str) 0))
+                                                       {:trade_date (str (:trade_date row))
+                                                        :close     (nth closes i)
+                                                        ma-kw      m})))
+                                   slice))]
+                {:ok {:items out-items}}))))))))
+
 (defn ma
   "计算日 K 收盘价的 N 周期简单移动平均。语义：截止日 till-date，往前取 back-days 个交易日。
    - stock-code: 股票代码；period: MA 周期（如 5、10、20、60）。
@@ -190,46 +233,43 @@
            :else (ma-from-payload (:ok k) ma-days back-days till-date)))))))
 
 (defn ma-for-multiple-stocks
-  "多股票版 MA：对多只股票一次性取日 K 并计算 N 周期移动平均。语义与 ma 一致：截止日 till-date，往前 back-days 个交易日。
-   - stock-codes: 股票代码序列（如 [\"000001\" \"000002\"]）；period: MA 周期；可选 till-date、back-days。
+  "多股票版 MA：对多只股票一次性取日 K，计算 [date-from, date-to] 区间内每个交易日的 period 日移动平均。
+   - stock-codes: 股票代码序列（如 [\"000001\" \"000002\"]）；period: MA 周期（如 5、10、20）。
+   - date-from, date-to: 日期闭区间 YYYYMMDD。3 参数时 (stock-codes period date) 表示单日。
    返回 {:ok {:by_ts_code {\"000001.SZ\" {:items [...]} \"000002.SZ\" {:items [...]} ...}}} 或 {:error _}。"
-  ([stock-codes period]
-   (ma-for-multiple-stocks stock-codes period nil 1))
-  ([stock-codes period till-date]
-   (ma-for-multiple-stocks stock-codes period till-date 1))
-  ([stock-codes period till-date back-days]
-   (let [ma-days    (long period)
-         back-days  (if (or (nil? back-days) (neg? (long back-days))) 1 (long back-days))
-         ts-codes   (vec (distinct (map #(normalize-ts-code (str %)) (filter (complement str/blank?) (seq stock-codes)))))]
+  ([stock-codes period date-from date-to]
+   (let [ma-days   (long period)
+         ts-codes  (vec (distinct (map #(normalize-ts-code (str %)) (filter (complement str/blank?) (seq stock-codes)))))
+         from-str  (str date-from)
+         to-str    (str date-to)]
      (cond
        (empty? ts-codes) {:error "至少需要一只股票代码。"}
        (< ma-days 2) {:error "MA 周期至少为 2。"}
-       (and till-date (not (parse-ymd till-date))) {:error "截止日格式须为 YYYYMMDD。"}
+       (not (parse-ymd from-str)) {:error "date-from 格式须为 YYYYMMDD。"}
+       (not (parse-ymd to-str)) {:error "date-to 格式须为 YYYYMMDD。"}
+       (> (compare from-str to-str) 0) {:error "date-from 不能晚于 date-to。"}
        :else
-       (let [start-d   (if till-date
-                         (when-let [d (parse-ymd till-date)]
-                           (date->str (minus-days (next-weekday d) 400)))
-                         (date->str (minus-days (LocalDate/now) 400)))
-             date-to   (if till-date
-                         (if (string? till-date) till-date (date->str till-date))
-                         (k-line-store/effective-today-ymd))
-             all-rows  (when start-d (k-line-store/get-daily-k-for-multiple-stocks ts-codes start-d date-to))]
+       (let [start-d  (when-let [d (parse-ymd from-str)]
+                        (date->str (minus-days (next-weekday d) 400)))
+             all-rows  (when start-d (k-line-store/get-daily-k-for-multiple-stocks ts-codes start-d to-str))]
          (cond
            (nil? all-rows) {:error "K 线缓存未初始化"}
-           (nil? start-d) {:error "截止日格式须为 YYYYMMDD。"}
+           (nil? start-d) {:error "date-from 格式须为 YYYYMMDD。"}
            :else
            (let [by-code   (group-by :ts_code all-rows)
                  results   (map (fn [code]
                                   (let [rows   (get by-code code [])
                                         payload {:fields default-daily-fields
                                                  :items  (mapv #(update % :trade_date str) rows)}
-                                        res    (ma-from-payload payload ma-days back-days till-date)]
+                                        res    (ma-from-payload-by-range payload ma-days from-str to-str)]
                                     [code res]))
                                ts-codes)
                  first-err (first (keep (fn [[_code res]] (when (:error res) res)) results))]
              (if first-err
                first-err
-               {:ok {:by_ts_code (into {} (map (fn [[code res]] [code (:ok res)]) results))}}))))))))
+               {:ok {:by_ts_code (into {} (map (fn [[code res]] [code (:ok res)]) results))}})))))))
+  ([stock-codes period date]
+   (ma-for-multiple-stocks stock-codes period (str date) (str date))))
 
 (defn- crosses-from-ma-items
   "根据短期、长期 MA 的 items（均按 trade_date 升序）检测金叉，返回 [{:date _ :short_ma _ :long_ma _} ...]。"
@@ -296,18 +336,25 @@
        (< long-period 2) {:error "长期 MA 周期至少为 2。"}
        (>= short-period long-period) {:error "短期周期应小于长期周期（如 5 与 20）。"}
        :else
-       (let [ma-short (ma-for-multiple-stocks ts-codes short-period till-date back-days)
-             ma-long  (ma-for-multiple-stocks ts-codes long-period till-date back-days)]
+       (let [date-to   (if (str/blank? (str till-date))
+                         (k-line-store/effective-today-ymd)
+                         (str till-date))
+             date-from (when-let [d (parse-ymd date-to)]
+                         (date->str (minus-days (next-weekday d) 400)))
+             ma-short  (when date-from (ma-for-multiple-stocks ts-codes short-period date-from date-to))
+             ma-long   (when date-from (ma-for-multiple-stocks ts-codes long-period date-from date-to))]
          (cond
+           (nil? date-from) {:error "截止日格式须为 YYYYMMDD。"}
            (:error ma-short) ma-short
            (:error ma-long)  ma-long
            :else
-           (let [short-by (get-in ma-short [:ok :by_ts_code])
-                 long-by  (get-in ma-long [:ok :by_ts_code])
-                 by-code  (map (fn [code]
-                                [code {:crosses (crosses-from-ma-items
-                                                 (get-in short-by [code :items])
-                                                 (get-in long-by [code :items])
-                                                 short-period long-period)}])
-                              ts-codes)]
+           (let [short-by   (get-in ma-short [:ok :by_ts_code])
+                 long-by    (get-in ma-long [:ok :by_ts_code])
+                 take-last-n (fn [items n] (vec (take-last n (or items []))))
+                 by-code    (map (fn [code]
+                                  [code {:crosses (crosses-from-ma-items
+                                                   (take-last-n (get-in short-by [code :items]) (long back-days))
+                                                   (take-last-n (get-in long-by [code :items]) (long back-days))
+                                                   short-period long-period)}])
+                                ts-codes)]
              {:ok {:by_ts_code (into {} by-code)}})))))))

@@ -24,7 +24,7 @@
                        "   - K 线：(stock/get-k stock-code dwmsy date-from date-to)。stock-code 如 \"000001\"；dwmsy \"日k\"|\"周k\"|\"月k\"；均为日期闭区间。3 参数时 date-to=date-from，只取这一根（周k/月k 用该周/月第一天代表该周/月）。返回 {:ok {:fields _ :items _ :source _}} 或 {:error _}；:source 为 :cache（缓存）或 :tushare（接口）；items 为 map 的向量，每条 key 为 :ts_code、:trade_date、:close 等（与 fields 对应）。\n"
                        "   - 移动平均 (stock/ma stock-code period & 可选 till-date back-days)。period 为 MA 周期（如 5、10、20）。语义：截止日 till-date（含），往前 back-days 个交易日。不传 till-date 则用最近交易日；back-days 默认 1。返回 {:ok {:items [{:trade_date \"...\" :close x :ma5 y} ...]}}。\n"
                        "     用法：今天 MA5 → (stock/ma \"000001\" 5)；某日当天 → (stock/ma \"000001\" 5 \"YYYYMMDD\")；某日及前 4 天 → (stock/ma \"000001\" 5 \"YYYYMMDD\" 5)。\n"
-                       "   - 多股票 MA (stock/ma-for-multiple-stocks stock-codes period & 可选 till-date back-days)。period 为 MA 周期。返回 {:ok {:by_ts_code {\"000001.SZ\" {:items [...]} ...}}}。\n"
+                       "   - 多股票 MA (stock/ma-for-multiple-stocks stock-codes period date-from date-to)。计算 [date-from, date-to] 区间内每个交易日的 period 日 MA。3 参数时 (stock-codes period date) 表示单日。返回 {:ok {:by_ts_code {\"000001.SZ\" {:items [...]} ...}}}。\n"
                        "   - 金叉 (stock/golden-cross stock-code short-days long-days & 可选 till-date back-days)。同上语义；back-days 默认 5。返回 {:ok {:crosses [...]}} 或 {:error _}。\n"
                        "   - 多股票金叉 (stock/golden-cross-for-multiple-stocks stock-codes short-period long-period & 可选 till-date back-days)。返回 {:ok {:by_ts_code {\"000001.SZ\" {:crosses [...]} ...}}}。\n"
                        "6) 如需其他外部数据，可用 http + json + env：例如 Tushare 可 POST http://api.tushare.pro，body 为 JSON（api_name、token、params），返回用 json/parse-string 解析。\n"
