@@ -198,7 +198,7 @@ function isExecuteClojureResult(
 
 function formatOkForDisplay(ok: unknown): string {
   if (ok === null || ok === undefined) return "成功";
-  if (typeof ok === "string" && ok.length <= 120) return ok;
+  if (typeof ok === "string") return ok;
   if (typeof ok === "number" || typeof ok === "boolean") return String(ok);
   return "成功";
 }
@@ -222,14 +222,14 @@ function ToolResultBody({ result }: { result: unknown }) {
   return (
     <div className="flex flex-col gap-2 p-2">
       {hasError && (
-        <div className="rounded border border-red-500/70 bg-red-500/10 px-2 py-1.5 text-xs text-red-700 dark:text-red-300">
+        <pre className="min-w-0 max-h-[14rem] overflow-auto rounded border border-red-500/70 bg-red-500/10 px-2 py-1.5 text-xs text-red-700 dark:text-red-300 whitespace-pre-wrap break-words">
           {normalized.error}
-        </div>
+        </pre>
       )}
       {hasOk && !hasError && (
-        <div className="rounded border border-green-600/60 bg-green-500/10 px-2 py-1.5 text-xs text-green-800 dark:text-green-200">
+        <pre className="min-w-0 max-h-[14rem] overflow-auto rounded border border-green-600/60 bg-green-500/10 px-2 py-1.5 text-xs text-green-800 dark:text-green-200 whitespace-pre-wrap break-words">
           {formatOkForDisplay(normalized.ok)}
-        </div>
+        </pre>
       )}
       {hasOut && (
         <pre className="min-w-0 max-h-[14rem] overflow-auto rounded bg-[#1e1e1e] px-2 py-1.5 font-mono text-xs text-[#e0e0e0] whitespace-pre-wrap break-words">
