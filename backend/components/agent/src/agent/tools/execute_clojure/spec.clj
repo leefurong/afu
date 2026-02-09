@@ -26,6 +26,7 @@
                        "     用法：今天 MA5 → (stock/ma \"000001\" 5)；某日当天 → (stock/ma \"000001\" 5 \"YYYYMMDD\")；某日及前 4 天 → (stock/ma \"000001\" 5 \"YYYYMMDD\" 5)。\n"
                        "   - 多股票 MA (stock/ma-for-multiple-stocks stock-codes period & 可选 till-date back-days)。period 为 MA 周期。返回 {:ok {:by_ts_code {\"000001.SZ\" {:items [...]} ...}}}。\n"
                        "   - 金叉 (stock/golden-cross stock-code short-days long-days & 可选 till-date back-days)。同上语义；back-days 默认 5。返回 {:ok {:crosses [...]}} 或 {:error _}。\n"
+                       "   - 多股票金叉 (stock/golden-cross-for-multiple-stocks stock-codes short-period long-period & 可选 till-date back-days)。返回 {:ok {:by_ts_code {\"000001.SZ\" {:crosses [...]} ...}}}。\n"
                        "6) 如需其他外部数据，可用 http + json + env：例如 Tushare 可 POST http://api.tushare.pro，body 为 JSON（api_name、token、params），返回用 json/parse-string 解析。\n"
                        "7) pprint：(pprint/pprint x) 格式化打印，便于查看复杂结构。\n\n"
                        "禁止：require/import、Java 互操作、eval/load-file/slurp/spit/read-string 等。\n\n"
