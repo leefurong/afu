@@ -312,6 +312,88 @@
     (str/starts-with? (str s) "6") (str s ".SH")
     :else (str s ".SZ")))
 
+(defn- row-payload->map [ts-code trade-date row-payload source]
+  (let [p (edn/read-string row-payload)]
+    (if (= p placeholder)
+      {:ts_code ts-code :trade_date trade-date :source source :placeholder true}
+      (assoc (or p {}) :ts_code ts-code :trade_date trade-date :source source))))
+
+(defn- get-daily-k-in-cache
+  "Private. 一次 SQL 查询：获取 codes 在 [date-from, date-to]（含）内的缓存数据；含非交易日占位行。返回 [{:ts_code _ :trade_date _ :source :cache ...} ...]。"
+  [codes date-from date-to]
+  (if (or (empty? codes) (nil? (get-ds)))
+    []
+    (let [ds (get-ds)
+          placeholders (str/join ", " (repeat (count codes) "?"))
+          sql (str "SELECT ts_code, trade_date, row_payload FROM k_line_daily WHERE ts_code IN (" placeholders ") AND trade_date >= ? AND trade_date <= ? ORDER BY ts_code, trade_date")
+          params (into [] (concat (vec codes) [date-from date-to]))
+          rows (jdbc/execute! ds (into [sql] params) {:builder-fn rs/as-unqualified-lower-maps})]
+      (map (fn [r]
+             (row-payload->map (get r :ts_code) (get r :trade_date) (get r :row_payload) :cache))
+           rows))))
+
+(defn- read-daily-k-range-including-placeholders
+  "Private. 读取单只股票 [date-from, date-to] 区间内的所有行（含占位符），按 trade_date 升序。"
+  [ds ts-code date-from date-to]
+  (let [rows (jdbc/execute! ds
+                ["SELECT trade_date, row_payload FROM k_line_daily WHERE ts_code = ? AND trade_date >= ? AND trade_date <= ? ORDER BY trade_date ASC"
+                 ts-code date-from date-to]
+                {:builder-fn rs/as-unqualified-lower-maps})]
+    (map (fn [r]
+           (row-payload->map ts-code (get r :trade_date) (get r :row_payload) :cache))
+         rows)))
+
+(defn- get-daily-k-from-tushare
+  "Private. 单只股票 [date-from, date-to] 从 Tushare 拉取并合并到 DB，返回该区间行（含占位符），:source :tushare。
+   date-from > date-to 时返回空序列。"
+  [code date-from date-to]
+  (if (pos? (compare date-from date-to))
+    []
+    (let [ds (get-ds)]
+      (if (nil? ds)
+        []
+        (let [res (extend-cache-with-range! ds code date-from date-to)]
+          (if (:error res)
+            []
+            (->> (read-daily-k-range-including-placeholders ds code date-from date-to)
+                 (map #(assoc % :source :tushare)))))))))
+
+(defn- ensure-daily-k
+  "Private. daily-k-rows 为 get-daily-k-in-cache 对该 code 的返回值（已按 trade_date 升序，由 SQL ORDER BY 保证）。
+   计算缺的左边、缺的右边，分别调 get-daily-k-from-tushare，再拼接 [缺的左边] + cache 行 + [缺的右边] 返回。"
+  [code daily-k-rows date-from date-to]
+  (let [date-from (str date-from)
+        date-to (str date-to)
+        date-strings (map #(str (:trade_date %)) daily-k-rows)
+        min-date (when (seq date-strings) (first (sort date-strings)))
+        max-date (when (seq date-strings) (last (sort date-strings)))
+        left-end (cond
+                   (empty? daily-k-rows) date-to
+                   (neg? (compare (str date-from) (str min-date))) (date-str (.minus (parse-ymd (str min-date)) 1 ChronoUnit/DAYS))
+                   :else nil)
+        right-start (when (and max-date (neg? (compare (str max-date) date-to)))
+                     (date-str (.plus (parse-ymd (str max-date)) 1 ChronoUnit/DAYS)))
+        left-rows (if left-end
+                    (get-daily-k-from-tushare code date-from left-end)
+                    [])
+        right-rows (if right-start
+                     (get-daily-k-from-tushare code right-start date-to)
+                     [])]
+    (concat left-rows daily-k-rows right-rows)))
+
+(defn get-daily-k-for-multiple-stocks
+  "Public. 先按 codes + date-from + date-to 批量从缓存取数，再对每个 code 用 ensure-daily-k 补全左右缺段，合并后排除非交易日返回。"
+  [codes date-from date-to]
+  (when (seq codes)
+    (when-let [ds (get-ds)]
+      (let [all-cache (get-daily-k-in-cache codes date-from date-to)
+            by-code (group-by :ts_code all-cache)
+            normalized (map #(normalize-ts-code %) codes)
+            merged (mapcat (fn [code]
+                             (ensure-daily-k code (get by-code code []) date-from date-to))
+                           normalized)]
+        (filter (complement :placeholder) merged)))))
+
 (defn get-cache-bounds
   "返回某只股票当前缓存区间 {:left \"YYYYMMDD\" :right \"YYYYMMDD\"}，无缓存时 nil。供测试/调试。"
   [ts-code]
