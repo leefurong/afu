@@ -33,6 +33,10 @@
       (.format (.minus today 1 ChronoUnit/DAYS) basic-iso)
       (.format today basic-iso))))
 
+(defn- calendar-today-ymd
+  "当前日历日（上海时区）yyyyMMdd。用于判断某日是否为「今天」，避免对今天写 -1（无法区分非交易日与数据未更新）。"
+  []
+  (.format (LocalDate/from (ZonedDateTime/now shanghai-zone)) basic-iso))
 
 (defn- db-path []
   (or (System/getenv "K_LINE_DB_PATH")
@@ -181,24 +185,28 @@
   (set (ymd-between start-ymd end-ymd)))
 
 (defn- extend-cache-with-range!
-  "向 Tushare 请求 [start-ymd, end-ymd]，按日历日填充：有数据写行（map），无数据写占位符。"
+  "向 Tushare 请求 [start-ymd, end-ymd]，按日历日填充：有数据写行（map），无数据写占位符 -1。
+   例外：若某日无数据且该日为日历今天，则不写入（避免把「数据未更新」误当成非交易日）。"
   [ds ts-code start-ymd end-ymd]
   (let [res (fetch-daily-from-tushare ts-code start-ymd end-ymd)]
     (if (:error res)
       {:error (:error res)}
-      (let [payload  (:ok res)
-            fields   (:fields payload)
-            items    (:items payload)
-            date-set (calendar-days-set start-ymd end-ymd)
-            idx      (when (seq fields) (field-index fields "trade_date"))
-            by-date  (when (number? idx)
-                       (into {} (map (fn [item]
-                                       (let [d (str (nth item idx))]
-                                         [d (row-from-fields fields item)]))
-                                     items)))]
+      (let [payload    (:ok res)
+            fields     (:fields payload)
+            items      (:items payload)
+            date-set   (calendar-days-set start-ymd end-ymd)
+            idx        (when (seq fields) (field-index fields "trade_date"))
+            by-date    (when (number? idx)
+                         (into {} (map (fn [item]
+                                         (let [d (str (nth item idx))]
+                                           [d (row-from-fields fields item)]))
+                                       items)))
+            today-ymd  (calendar-today-ymd)
+            date-rows  (->> (sort (seq date-set))
+                            (map (fn [d] [d (get by-date d placeholder)]))
+                            (remove (fn [[d payload]] (and (= payload placeholder) (= d today-ymd)))))]
         (if (map? by-date)
-          (do (let [date-rows (map (fn [d] [d (get by-date d placeholder)]) (sort (seq date-set)))]
-                (insert-rows! ds ts-code date-rows))
+          (do (insert-rows! ds ts-code date-rows)
               {:ok true})
           ;; Tushare 返回缺少 trade_date 或无法解析时，不写入仍返回 :ok 会导致缓存为空、测试误判；改为返回 :error
           {:error "Tushare 日线返回缺少 trade_date 或无法解析"})))))
