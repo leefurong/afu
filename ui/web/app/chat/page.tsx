@@ -30,6 +30,7 @@ import {
   type ConversationItem,
   type ConversationMessage,
 } from "@/services/conversation";
+import { parseEDNString } from "edn-data";
 
 const CHAT_API =
   typeof process.env.NEXT_PUBLIC_CHAT_API !== "undefined"
@@ -166,6 +167,82 @@ function stepBody(step: StreamStep): string {
   }
 }
 
+/** 归一化 tool result：流式是对象，历史可能是 JSON 或 EDN 字符串。用 edn-data 解析 EDN，统一成对象再按形状渲染。 */
+function normalizeToolResult(result: unknown): unknown {
+  if (typeof result !== "string") return result;
+  try {
+    return JSON.parse(result) as unknown;
+  } catch {
+    try {
+      return parseEDNString(result, {
+        mapAs: "object",
+        keywordAs: "string",
+      }) as unknown;
+    } catch {
+      return result;
+    }
+  }
+}
+
+/** execute_clojure 工具返回的结构：{ ok?, out?, error? }。仅按数据形状判断，不区分来源。 */
+function isExecuteClojureResult(
+  r: unknown
+): r is { ok?: unknown; out?: string; error?: string } {
+  return (
+    r !== null &&
+    typeof r === "object" &&
+    !Array.isArray(r) &&
+    ("ok" in r || "out" in r || "error" in r)
+  );
+}
+
+function formatOkForDisplay(ok: unknown): string {
+  if (ok === null || ok === undefined) return "成功";
+  if (typeof ok === "string" && ok.length <= 120) return ok;
+  if (typeof ok === "number" || typeof ok === "boolean") return String(ok);
+  return "成功";
+}
+
+/** 声明式：根据 result 形状选择展示方式。来源（流式 / 历史）无关。 */
+function ToolResultBody({ result }: { result: unknown }) {
+  const normalized = normalizeToolResult(result);
+  if (!isExecuteClojureResult(normalized)) {
+    const body = typeof normalized === "string" ? normalized : JSON.stringify(normalized, null, 2);
+    return (
+      <pre className="min-w-0 whitespace-pre-wrap break-words p-2 font-mono text-xs">
+        {body || "—"}
+      </pre>
+    );
+  }
+
+  const hasError = typeof normalized.error === "string" && normalized.error.length > 0;
+  const hasOk = "ok" in normalized;
+  const hasOut = typeof normalized.out === "string" && normalized.out.length > 0;
+
+  return (
+    <div className="flex flex-col gap-2 p-2">
+      {hasError && (
+        <div className="rounded border border-red-500/70 bg-red-500/10 px-2 py-1.5 text-xs text-red-700 dark:text-red-300">
+          {normalized.error}
+        </div>
+      )}
+      {hasOk && !hasError && (
+        <div className="rounded border border-green-600/60 bg-green-500/10 px-2 py-1.5 text-xs text-green-800 dark:text-green-200">
+          {formatOkForDisplay(normalized.ok)}
+        </div>
+      )}
+      {hasOut && (
+        <pre className="min-w-0 max-h-[14rem] overflow-auto rounded bg-[#1e1e1e] px-2 py-1.5 font-mono text-xs text-[#e0e0e0] whitespace-pre-wrap break-words">
+          {(normalized.out ?? "").replace(/\\n/g, "\n")}
+        </pre>
+      )}
+      {!hasError && !hasOk && !hasOut && (
+        <span className="text-muted-foreground text-xs">—</span>
+      )}
+    </div>
+  );
+}
+
 function CollapsibleStepBlock({
   step,
   expanded,
@@ -176,7 +253,9 @@ function CollapsibleStepBlock({
   onToggle: () => void;
 }) {
   const summary = stepSummary(step);
-  const body = stepBody(step);
+  const isToolResult = step.type === "tool_result";
+  const body = !isToolResult ? stepBody(step) : "";
+
   return (
     <div className="rounded-md border border-border/60 bg-muted/30 text-sm">
       <button
@@ -193,9 +272,13 @@ function CollapsibleStepBlock({
       </button>
       {expanded && (
         <div className="max-h-[16rem] overflow-auto border-t border-border/40">
-          <pre className="min-w-0 whitespace-pre-wrap break-words p-2 font-mono text-xs">
-            {body || "—"}
-          </pre>
+          {isToolResult ? (
+            <ToolResultBody result={step.result} />
+          ) : (
+            <pre className="min-w-0 whitespace-pre-wrap break-words p-2 font-mono text-xs">
+              {body || "—"}
+            </pre>
+          )}
         </div>
       )}
     </div>
