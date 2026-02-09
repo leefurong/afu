@@ -28,7 +28,14 @@
       (is (contains? res :ok))
       (is (= 42 (:ok res)))
       (is (contains? res :out))
-      (is (str/includes? (:out res) "hi")))))
+      (is (str/includes? (:out res) "hi"))))
+  (testing "pprint output appears in :out"
+    (let [res (se/eval-string "(pprint/pprint {:a 1 :b 2}) 99" {:capture-out? true})]
+      (is (contains? res :ok))
+      (is (= 99 (:ok res)))
+      (is (contains? res :out))
+      (is (str/includes? (:out res) ":a"))
+      (is (str/includes? (:out res) ":b")))))
 
 (deftest eval-string-with-ctx-stateful
   (testing "ctx keeps def state"
