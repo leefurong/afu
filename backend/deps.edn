@@ -17,4 +17,7 @@
           ;; - 选「Clojure REPL (JVM, 7888)」= 普通 JVM REPL，可跑测试、访问 server 内部状态；
           ;; - 选「SCI Sandbox (7889)」= 与聊天 execute_clojure 相同的 SCI 沙箱（http, json, stock 等）。
           ;; 单独在终端执行 clj -M:repl 只会起本地 REPL，与 server 非同一进程。
-          :repl {:extra-deps {org.slf4j/slf4j-simple {:mvn/version "2.0.9"}}}}}
+          :repl {:extra-deps {org.slf4j/slf4j-simple {:mvn/version "2.0.9"}}}
+
+          ;; 脚本：为缓存中所有日 K 计算 MA5/10/20/30/60 与金叉/死叉并写回 DB。在 backend 目录执行：clj -M:add-ma
+          :add-ma {:main-opts ["-m" "agent.tools.execute-clojure.sci-sandbox.script.add-ma-to-cache"]}}}
