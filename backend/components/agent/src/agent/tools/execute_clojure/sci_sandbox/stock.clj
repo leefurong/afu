@@ -85,11 +85,11 @@
   (first (keep-indexed (fn [i f] (when (= (str f) (str name)) i)) fields)))
 
 (defn get-k
-  "获取 K 线数据。日k 走 k-line-store 缓存，周k/月k 直连 Tushare，接口不变。"
-  ([stock-code dwmsy beg-date]
-   (get-k stock-code dwmsy beg-date 20))
-  ([stock-code dwmsy beg-date count]
-   (k-line-store/get-k stock-code dwmsy beg-date count)))
+  "获取 K 线数据。日k/周k/月k 均为 date-from + date-to；3 参数时 date-to=date-from，只取这一根（周k/月k 用该周/月第一天代表）。"
+  ([stock-code dwmsy date-from]
+   (get-k stock-code dwmsy date-from date-from))
+  ([stock-code dwmsy date-from date-to]
+   (k-line-store/get-k stock-code dwmsy date-from date-to)))
 
 (defn- parse-close
   [v]
@@ -172,13 +172,14 @@
        (< ma-days 2) {:error "MA 周期 days 至少为 2。"}
        (and till-date (not (parse-ymd till-date))) {:error "截止日格式须为 YYYYMMDD。"}
        :else
-       (let [k-need    (+ (dec ma-days) back-days)
-             k-request (max 320 (+ k-need 150))
-             start-d   (if till-date
+       (let [start-d   (if till-date
                          (when-let [d (parse-ymd till-date)]
                            (date->str (minus-days (next-weekday d) 400)))
                          (date->str (minus-days (LocalDate/now) 400)))
-             k         (get-k (str stock-code) "日k" start-d k-request)]
+             date-to   (if till-date
+                         (if (string? till-date) till-date (date->str till-date))
+                         (k-line-store/effective-today-ymd))
+             k         (get-k (str stock-code) "日k" start-d date-to)]
          (cond
            (:error k) k
            (nil? start-d) {:error "截止日格式须为 YYYYMMDD。"}

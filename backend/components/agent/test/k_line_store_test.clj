@@ -27,13 +27,13 @@
   (k/ensure-schema! nil ":memory:")
   (testing "未初始化时 get-daily-k 返回 :error"
     (k/reset-for-test!)
-    (let [res (k/get-daily-k "000001.SZ" "20250101" 5)]
+    (let [res (k/get-daily-k "000001.SZ" "20250101" "20250110")]
       (is (contains? res :error))
       (is (string? (:error res)))))
   (testing "使用 :memory: 初始化后 get-daily-k 可调用（会请求 Tushare，无 token 则 :error）"
     (k/reset-for-test!)
     (k/ensure-schema! nil ":memory:")
-    (let [res (k/get-daily-k "000001.SZ" "20250101" 5)]
+    (let [res (k/get-daily-k "000001.SZ" "20250101" "20250110")]
       (is (or (contains? res :ok) (contains? res :error)))
       (when (:ok res)
         (is (contains? (:ok res) :source))
@@ -44,21 +44,21 @@
   (testing "日k 委托 get-daily-k"
     (k/reset-for-test!)
     (k/ensure-schema! nil ":memory:")
-    (let [res (k/get-k "000001" "日k" "20250101" 10)]
+    (let [res (k/get-k "000001" "日k" "20250101" "20250115")]
       (is (or (contains? res :ok) (contains? res :error)))))
   (testing "周k 直连 Tushare，返回 :ok 或 :error"
-    (let [res (k/get-k "000001" "周k" "20250101" 10)]
+    (let [res (k/get-k "000001" "周k" "20250101" "20250115")]
       (is (or (contains? res :ok) (contains? res :error)))))
   (testing "季k 返回错误"
-    (is (contains? (k/get-k "000001" "季k" "20250101" 10) :error))))
+    (is (contains? (k/get-k "000001" "季k" "20250101" "20250115") :error))))
 
 (deftest cache-continuity-after-left-extend
   "先请求 2025-01-01，再请求 2023-01-01 后，缓存应覆盖 [2023-01-01, 有效今日]，且再次请求 2023-01-01 应命中缓存。"
   (k/reset-for-test!)
   (k/ensure-schema! nil ":memory:")
   (let [effective-today (k/effective-today-ymd)
-        r1 (k/get-daily-k "000001.SZ" "20250101" 5)
-        r2 (k/get-daily-k "000001.SZ" "20230101" 10)]
+        r1 (k/get-daily-k "000001.SZ" "20250101" "20250110")
+        r2 (k/get-daily-k "000001.SZ" "20230101" effective-today)]
     (when (and (contains? r1 :ok) (contains? r2 :ok))
       (let [bounds (k/get-cache-bounds "000001.SZ")]
         (is bounds "拓展后应有缓存区间")
@@ -70,7 +70,7 @@
           (is (= (k/get-cache-row-count "000001.SZ")
                  (k/count-calendar-days-in-range (:left bounds) (:right bounds)))
               "left 到 right 之间每一天都应有一条数据（行数 = 日历天数）")))
-      (let [r3 (k/get-daily-k "000001.SZ" "20230101" 5)]
+      (let [r3 (k/get-daily-k "000001.SZ" "20230101" "20250110")]
         (when (contains? r3 :ok)
           (is (= :cache (get-in r3 [:ok :source]))
               "再次请求 2023-01-01 应命中缓存"))))))
@@ -80,7 +80,7 @@
   (k/reset-for-test!)
   (k/ensure-schema! nil ":memory:")
   (let [effective-today (k/effective-today-ymd)
-        res (k/get-daily-k "000001.SZ" "20250201" 3)]
+        res (k/get-daily-k "000001.SZ" "20250201" effective-today)]
     (is (or (contains? res :ok) (contains? res :error)) "get-daily-k 应返回 :ok 或 :error")
     (when (contains? res :ok)
       (let [bounds (k/get-cache-bounds "000001.SZ")]
@@ -111,7 +111,7 @@
   "有数据时：返回非空、每条含 :ts_code/:trade_date/:source、无占位符、日期在请求区间内。"
   (k/reset-for-test!)
   (k/ensure-schema! nil ":memory:")
-  (let [fill (k/get-daily-k "000001.SZ" "20250102" 8)
+  (let [fill (k/get-daily-k "000001.SZ" "20250102" "20250115")
         res  (k/get-daily-k-for-multiple-stocks ["000001.SZ"] "20250101" "20250115")]
     (is (sequential? res) "应返回序列（可能空）")
     (when (contains? fill :ok)
@@ -133,7 +133,7 @@
   (k/ensure-schema! nil ":memory:")
   (let [date-from "20250102"
         date-to   "20250112"
-        r1       (k/get-daily-k "000001.SZ" date-from 10)
+        r1       (k/get-daily-k "000001.SZ" date-from date-to)
         res      (k/get-daily-k-for-multiple-stocks ["000001.SZ"] date-from date-to)]
     (when (and (contains? r1 :ok) (seq res))
       (let [rows-001 (filter #(= "000001.SZ" (:ts_code %)) res)]
@@ -147,7 +147,7 @@
   (k/reset-for-test!)
   (k/ensure-schema! nil ":memory:")
   ;; 只拉 20250106 起 5 条，缓存约 [20250106, 有效今日]；再请求 [20250101, 20250110]，则 20250101-20250105 应为 tushare，20250106-20250110 应为 cache
-  (let [r1  (k/get-daily-k "000001.SZ" "20250106" 5)
+  (let [r1  (k/get-daily-k "000001.SZ" "20250106" "20250110")
         res (k/get-daily-k-for-multiple-stocks ["000001.SZ"] "20250101" "20250110")]
     (when (and (contains? r1 :ok) (seq res))
       (let [rows-001 (filter #(= "000001.SZ" (:ts_code %)) res)
@@ -165,7 +165,7 @@
   "请求区间右侧超出缓存时，缺的右边应来自 tushare。"
   (k/reset-for-test!)
   (k/ensure-schema! nil ":memory:")
-  (let [r1  (k/get-daily-k "000001.SZ" "20250102" 5)
+  (let [r1  (k/get-daily-k "000001.SZ" "20250102" "20250115")
         res (k/get-daily-k-for-multiple-stocks ["000001.SZ"] "20250101" "20250115")]
     (when (and (contains? r1 :ok) (seq res))
       (let [bounds    (k/get-cache-bounds "000001.SZ")
@@ -182,7 +182,7 @@
   "多 code 时：按 ts_code 分组各有数据，且来源标记正确（有 cache 的来自 cache）。"
   (k/reset-for-test!)
   (k/ensure-schema! nil ":memory:")
-  (let [_   (k/get-daily-k "000001.SZ" "20250103" 5)
+  (let [_   (k/get-daily-k "000001.SZ" "20250103" "20250115")
         res (k/get-daily-k-for-multiple-stocks ["000001.SZ" "000002.SZ"] "20250101" "20250115")]
     (is (sequential? res))
     (when (seq res)

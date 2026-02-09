@@ -99,11 +99,12 @@
           (is (map? r))
           ;; get-k 成功返回 {:ok {:fields _ :items _}}，失败返回 {:error _}
           (is (or (contains? r :ok) (contains? r :error)))))))
-  (testing "stock/get-k with 3 args (no count) defaults to 20"
+  (testing "stock/get-k 日k with 3 args (date-to=date-from) 只取这一根"
     (let [res (se/eval-string "(stock/get-k \"000001.SZ\" \"日k\" \"20250101\")")]
       (is (map? res))
-      (when (and (:ok res) (seq (get-in (:ok res) [:ok :items])))
-        (is (<= (count (get-in (:ok res) [:ok :items])) 20)))))
+      (when (and (:ok res) (get-in (:ok res) [:ok :items]))
+        (is (vector? (get-in (:ok res) [:ok :items])))
+        (is (<= (count (get-in (:ok res) [:ok :items])) 1) "只取一根"))))
   (testing "stock/get-k 季k returns error (unsupported)"
     (let [res (se/eval-string "(stock/get-k \"000001\" \"季k\" \"20250101\")")]
       (is (contains? res :ok))
