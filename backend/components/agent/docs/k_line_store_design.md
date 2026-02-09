@@ -72,9 +72,7 @@
 
 ## 5. 对外 API（保持与现有调用方兼容）
 
-- **get-daily-k**：供stock.clj中的get-k调用。`(get-daily-k stock-code beg-date req-count)`。返回 `{:ok [{k-data}, {k-data},]}` 或 `{:error _}`。
-  - `k-data`：每个map是一条k线的数据。（如 `:trade_date`、`:close` 等）。如果非交易日，则所有值都是-1.
-  - `:source`：`:cache` 或 `:tushare`。
+- **get-daily-k-for-multiple-stocks**：对外唯一日 K 接口。`(get-daily-k-for-multiple-stocks codes date-from date-to)`。返回 `[{k-data} ...]`（按 ts_code、trade_date 升序）或 `nil`（未初始化）。`k-data` 含 `:ts_code`、`:trade_date`、`:close` 等及 `:source`（`:cache` 或 `:tushare`）。非交易日占位符已过滤。
 
 ---
 
@@ -90,7 +88,7 @@
 - [ ] 路径(在k_line_store.clj中配置就行)：读 `K_LINE_DB_PATH`；未设置则用 `backend/data/sqlite.db`（测试用 `:memory:`）。
 - [ ] 占位符：非交易日用固定值（-1）与真实行区分；读时过滤掉占位符再计数和返回。
 - [ ] 任何股票的所有缓存行的日期保证连续；向右拓展一律到「今天」；向左拓展到用户请求的起始日（当 start-d < left 时）。
-- [ ] get-daily-k：先算 start-d；查区间；若 start-d 在区间内则从 start-d 起扫、跳过占位、取满 n-max 则返回 :cache；否则拓展（右到今天且左到 min(start-d, current-cache-left)）后返回 :tushare。
+- [ ] get-daily-k-for-multiple-stocks：按 codes + date-from + date-to 查缓存，缺段用 ensure-daily-k 补全（Tushare），合并后过滤占位符返回。
 - [ ] 实现一个计算“智能拓展区间”的函数。
 - [ ] 向tushare发起请求的时候，调用上述函数， 计算需要请求的日期区间。
 - [ ] Cron：所有股「右边延展到今天」；无任何数据， 则「一年前今天～今天」。

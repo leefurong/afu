@@ -91,62 +91,10 @@
       (when (:ok res) (is (string? (:ok res)))))))
 
 (deftest stock-namespace-available
-  (testing "stock/get-k is available and returns map with :ok or :error"
-    (let [res (se/eval-string "(stock/get-k \"000001\" \"日k\" \"20250101\")")]
-      (is (or (contains? res :ok) (contains? res :error)))
-      (when (:ok res)
-        (let [r (:ok res)]
-          (is (map? r))
-          ;; get-k 成功返回 {:ok {:fields _ :items _}}，失败返回 {:error _}
-          (is (or (contains? r :ok) (contains? r :error)))))))
-  (testing "stock/get-k 日k with 3 args (date-to=date-from) 只取这一根"
-    (let [res (se/eval-string "(stock/get-k \"000001.SZ\" \"日k\" \"20250101\")")]
-      (is (map? res))
-      (when (and (:ok res) (get-in (:ok res) [:ok :items]))
-        (is (vector? (get-in (:ok res) [:ok :items])))
-        (is (<= (count (get-in (:ok res) [:ok :items])) 1) "只取一根"))))
-  (testing "stock/get-k 季k returns error (unsupported)"
-    (let [res (se/eval-string "(stock/get-k \"000001\" \"季k\" \"20250101\")")]
+  (testing "stock/ma-for-multiple-stocks is available and returns :ok or :error"
+    (let [res (se/eval-string "(stock/ma-for-multiple-stocks [\"000001\"] 5 \"20250101\" \"20250110\")")]
       (is (contains? res :ok))
-      (is (string? (get-in res [:ok :error]))))))
-
-(deftest stock-ma
-  (testing "stock/ma with period < 2 returns error"
-    (let [res (se/eval-string "(stock/ma \"000001\" 1)")]
-      (is (contains? res :ok))
-      (is (= {:error "MA 周期至少为 2。"} (get-in res [:ok])))))
-
-  ;; 三种用法：period + 可选 beg-date、bar-count
-  ;; 1) 今天的 MA5：period=5，beg-date 不设，bar-count 不设 → 最后一行为最近交易日，最后一行的 ma 即「今天的 MA5」
-  (testing "today's MA5: (ma stock-code 5) — no beg-date, no bar-count; last row is latest trading day, last row ma is today's MA5"
-    (let [res (se/eval-string "(stock/ma \"000001\" 5)")]
-      (is (contains? res :ok))
-      (let [payload (get-in res [:ok :ok])
-            items   (get payload :items)]
-        (when (and payload (seq items))
-          (let [last-row (peek items)]
-            (is (map? last-row))
-            (is (number? (:ma5 last-row)) "last row :ma5 is today's MA5 (numeric)"))))))
-
-  ;; 2) 从 beg-date 起 1 天 MA（默认 num-days=1）
-  (testing "ma with beg-date only: (ma stock-code 5 beg-date) — default num-days=1; exactly 1 row from beg-date"
-    (let [res (se/eval-string "(stock/ma \"000001\" 5 \"20250101\")")]
-      (is (contains? res :ok))
-      (let [payload (get-in res [:ok :ok])
-            items   (get payload :items)]
-        (when (and payload (seq items))
-          (let [first-date (:trade_date (first items))]
-            (is (= 8 (count (str first-date))) "first row :trade_date is YYYYMMDD")
-            (is (= 1 (count items)) "default num-days=1 => 1 row"))))))
-
-  ;; 3) 从 beg-date 起 2 天 MA：num-days=2 → 仅 2 行
-  (testing "2 days of MA from beg-date: (ma stock-code 5 beg-date 2) — num-days=2; exactly 2 rows"
-    (let [res (se/eval-string "(stock/ma \"000001\" 5 \"20250101\" 2)")]
-      (is (contains? res :ok))
-      (let [payload (get-in res [:ok :ok])
-            items   (get payload :items)]
-        (when payload
-          (is (= 2 (count items)) "bar-count=2 => exactly 2 rows"))))))
+      (is (or (contains? (get res :ok) :ok) (contains? (get res :ok) :error)))))
 
 (deftest stock-ma-for-multiple-stocks
   (testing "ma-for-multiple-stocks empty codes returns error"
@@ -167,18 +115,6 @@
             (when (seq by-code)
               (is (every? (fn [[_k v]] (contains? v :items)) (seq by-code)) "each entry has :items"))))))))
 
-(deftest stock-golden-cross
-  (testing "golden-cross returns :ok with :crosses vector (calls ma twice)"
-    (let [res (se/eval-string "(stock/golden-cross \"000001\" 5 20 \"20250101\" 60)")]
-      (is (contains? res :ok))
-      (let [inner (get res :ok)]
-        (when (contains? inner :ok)
-          (is (vector? (get-in inner [:ok :crosses])) "crosses is a vector")))))
-  (testing "golden-cross short >= long returns error"
-    (let [res (se/eval-string "(stock/golden-cross \"000001\" 20 5)")]
-      (is (contains? res :ok))
-      (is (clojure.string/includes? (str (get-in res [:ok :error])) "短期周期应小于长期周期")))))
-
 (deftest stock-golden-cross-for-multiple-stocks
   (testing "golden-cross-for-multiple-stocks empty codes returns error"
     (let [res (se/eval-string "(stock/golden-cross-for-multiple-stocks [] 5 20 \"20250101\" \"20250110\")")]
@@ -196,4 +132,4 @@
           (let [by-code (get-in inner [:ok :by_ts_code])]
             (is (map? by-code) "by_ts_code is a map")
             (when (seq by-code)
-              (is (every? (fn [[_k v]] (contains? v :crosses)) (seq by-code)) "each entry has :crosses")))))))
+              (is (every? (fn [[_k v]] (contains? v :crosses)) (seq by-code)) "each entry has :crosses"))))))))

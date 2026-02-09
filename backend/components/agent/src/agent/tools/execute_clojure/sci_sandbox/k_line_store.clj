@@ -1,5 +1,5 @@
 (ns agent.tools.execute-clojure.sci-sandbox.k-line-store
-  "K 线：日线 SQLite 缓存（按 (ts_code, trade_date) 连续区间，非交易日占位符 -1）；周k/月k 直连 Tushare。"
+  "K 线：日线 SQLite 缓存（按 (ts_code, trade_date) 连续区间，非交易日占位符 -1）。对外仅提供 get-daily-k-for-multiple-stocks。"
   (:require [agent.tools.execute-clojure.sci-sandbox.stock-list-store :as stock-list-store]
             [agent.tools.execute-clojure.sci-sandbox.tushare :as tushare]
             [clojure.edn :as edn]
@@ -8,10 +8,9 @@
             [next.jdbc :as jdbc]
             [next.jdbc.result-set :as rs]
             [cronj.core :as cronj])
-  (:import (java.time LocalDate LocalTime ZonedDateTime ZoneId DayOfWeek)
+  (:import (java.time LocalDate LocalTime ZonedDateTime ZoneId)
            (java.time.format DateTimeFormatter)
-           (java.time.temporal ChronoUnit)
-           (java.time.temporal TemporalAdjusters)))
+           (java.time.temporal ChronoUnit)))
 
 ;; ---------------------------------------------------------------------------
 ;; 常量与配置
@@ -99,22 +98,6 @@
 
 (defn- date-str [^LocalDate d]
   (.format d basic-iso))
-
-(defn- week-range-ymd
-  "给定 YYYYMMDD，返回该周周一、周日的 [start-ymd end-ymd]（周一代表该周）。"
-  [ymd]
-  (when-let [d (parse-ymd (str ymd))]
-    (let [monday (.with d (TemporalAdjusters/previousOrSame DayOfWeek/MONDAY))
-          sunday (.plus monday 6 ChronoUnit/DAYS)]
-      [(date-str monday) (date-str sunday)])))
-
-(defn- month-range-ymd
-  "给定 YYYYMMDD，返回该月 1 号、末日的 [start-ymd end-ymd]（1 号代表该月）。"
-  [ymd]
-  (when-let [d (parse-ymd (str ymd))]
-    (let [first-day (.with d (TemporalAdjusters/firstDayOfMonth))
-          last-day  (.with d (TemporalAdjusters/lastDayOfMonth))]
-      [(date-str first-day) (date-str last-day)])))
 
 (defn- ymd-between [start-ymd end-ymd]
   (let [start (parse-ymd start-ymd)
@@ -234,40 +217,7 @@
             res
             (recur (rest ranges))))))))
 
-;; ---------------------------------------------------------------------------
-;; get-daily-k：命中判断与返回
-;; ---------------------------------------------------------------------------
-
-(def ^:private default-daily-fields
-  ["ts_code" "trade_date" "open" "high" "low" "close" "pre_close" "change" "pct_chg" "vol" "amount"])
-
 (declare get-daily-k-for-multiple-stocks)
-
-(defn get-daily-k
-  "获取日 K：stock-code, date-from(YYYYMMDD), date-to(YYYYMMDD)。
-   返回 {:ok {:fields _ :items _ :source :cache|:tushare}} 或 {:error _}。
-   委托 get-daily-k-for-multiple-stocks，传单元素 [ts-code]，区间 [date-from, date-to] 内有多少返回多少。"
-  [stock-code date-from date-to]
-  (let [ts-code (if (str/includes? (str stock-code) ".")
-                  (str stock-code)
-                  (if (str/starts-with? (str stock-code) "6")
-                    (str stock-code ".SH")
-                    (str stock-code ".SZ")))
-        date-from (str date-from)
-        date-to (str date-to)
-        res (get-daily-k-for-multiple-stocks [ts-code] date-from date-to)]
-    (if (nil? res)
-      (do (log/warn "[k-line-store] get-daily-k: DB not initialized")
-          {:error "K 线缓存未初始化"})
-      (let [items res
-            source (if (some #(= :tushare (:source %)) items) :tushare :cache)]
-        {:ok {:fields default-daily-fields
-              :items (mapv #(update % :trade_date str) items)
-              :source source}}))))
-
-;; ---------------------------------------------------------------------------
-;; get-k：供 stock.clj 调用，日k 走缓存，周k/月k 直连 Tushare
-;; ---------------------------------------------------------------------------
 
 (defn- normalize-ts-code [s]
   (cond
@@ -377,45 +327,6 @@
                 ["SELECT COUNT(*) AS n FROM k_line_daily WHERE ts_code = ?" (normalize-ts-code ts-code)]
                 {:builder-fn rs/as-unqualified-lower-maps})]
       (get r :n 0))))
-
-(defn- fetch-week-month-k [stock-code freq date-from date-to]
-  (let [ts-code (normalize-ts-code stock-code)
-        res (tushare/request-tushare-api "stk_weekly_monthly" {:ts_code ts-code :freq freq})]
-    (if (:error res)
-      {:error (:error res)}
-      (let [payload (:ok res)
-            fields  (or (:fields payload) [])
-            items   (or (:items payload) [])
-            idx     (field-index fields "trade_date")]
-        (if (nil? idx)
-          {:ok {:fields fields :items [] :source :tushare}}
-          (let [from-str (str date-from)
-                to-str   (str date-to)
-                filtered (filter (fn [item]
-                                   (let [d (str (nth item idx))]
-                                     (and (<= (compare from-str d) 0)
-                                          (<= (compare d to-str) 0))))
-                                 items)
-                sorted   (sort-by #(nth % idx) filtered)
-                rows     (mapv #(assoc (row-from-fields fields %) :trade_date (str (nth % idx))) sorted)]
-            {:ok {:fields fields :items rows :source :tushare}}))))))
-
-(defn get-k
-  "获取 K 线。日k/周k/月k 均为 date-from、date-to（闭区间）。三参数时 date-to=date-from，只取一根：周k/月k 用该周/月第一天代表的区间（周一代表该周，1 号代表该月）。"
-  [stock-code dwmsy date-from date-to]
-  (let [from (str date-from)
-        to   (str date-to)
-        [from* to*] (cond
-                      (and (= from to) (= dwmsy "周k")) (or (week-range-ymd from) [from to])
-                      (and (= from to) (= dwmsy "月k")) (or (month-range-ymd from) [from to])
-                      :else [from to])]
-    (case dwmsy
-      "日k" (get-daily-k stock-code from* to*)
-      "周k" (fetch-week-month-k stock-code "week" from* to*)
-      "月k" (fetch-week-month-k stock-code "month" from* to*)
-      "季k" {:error "暂不支持季k/年k，请使用 日k、周k 或 月k。"}
-      "年k" {:error "暂不支持季k/年k，请使用 日k、周k 或 月k。"}
-      {:error "不支持的 K 线类型，请使用 日k、周k 或 月k。"})))
 
 ;; ---------------------------------------------------------------------------
 ;; Cron：每日拓展
