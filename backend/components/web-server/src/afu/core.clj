@@ -40,9 +40,10 @@
 (defn -main
   "供 clj -M:web-server 调用：启动 nREPL + Jetty。
    Jetty 端口：第一个参数或环境变量 PORT，默认 4000。
-   nREPL 端口：7888，可连 Cursor/Calva 边运行边 eval。"
+   nREPL 端口：7888（JVM REPL），7889（SCI REPL）。连 7889 时 Cursor/Calva 的 eval 在 SCI 沙箱执行。"
   [& [port-arg]]
   (start-nrepl!)
+  (nrepl-mw/start-nrepl-sci!)
   (let [port (or (when port-arg (parse-long port-arg))
                  (when-let [p (System/getenv "PORT")] (parse-long p))
                  default-port)]

@@ -13,7 +13,8 @@
                                     nrepl/nrepl             {:mvn/version "1.3.1"}}
                       :main-opts ["-m" "afu.core"]}
 
-          ;; 与 web-server 同 classpath。要访问服务器内部状态（如 stock-list-store/get-all-stock-codes），
-          ;; 需在编辑器中「Connect to REPL」连到已运行的 web-server nREPL（7888），代码在服务器进程内执行；
+          ;; 与 web-server 同 classpath。需先 clj -M:web-server，再在编辑器中 Connect to REPL：
+          ;; - 选「Clojure REPL (JVM, 7888)」= 普通 JVM REPL，可跑测试、访问 server 内部状态；
+          ;; - 选「SCI Sandbox (7889)」= 与聊天 execute_clojure 相同的 SCI 沙箱（http, json, stock 等）。
           ;; 单独在终端执行 clj -M:repl 只会起本地 REPL，与 server 非同一进程。
           :repl {:extra-deps {org.slf4j/slf4j-simple {:mvn/version "2.0.9"}}}}}
