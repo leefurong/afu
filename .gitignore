@@ -47,4 +47,4 @@ coverage/
 *.log
 logs/
 backend/backend/data/sqlite.db
-backend/components/web-server/.calva/repl.calva-repl
+.calva
