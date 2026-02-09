@@ -6,24 +6,30 @@
             [nrepl.server :as nrepl-server]
             [nrepl.transport :as transport]))
 
+(defn- base-response
+  "nREPL 响应需带 :id 和 :session，否则 Calva 等客户端无法关联并显示结果。"
+  [msg]
+  (select-keys msg [:id :session]))
+
 (defn- send-sci-result
-  [transport id result]
+  [transport msg result]
   (when transport
-    (let [id (or id (str (random-uuid)))]
+    (let [base (merge {:id (or (:id msg) (str (random-uuid)))}
+                     (base-response msg))]
       (when (and (contains? result :out) (seq (:out result)))
-        (transport/send transport {:id id :out (:out result)}))
+        (transport/send transport (assoc base :out (:out result))))
       (when (contains? result :ok)
-        (transport/send transport {:id id :value (pr-str (:ok result))}))
+        (transport/send transport (assoc base :value (pr-str (:ok result)))))
       (when (contains? result :error)
-        (transport/send transport {:id id :err (str (:error result))}))
-      (transport/send transport {:id id :status #{"done"}}))))
+        (transport/send transport (assoc base :err (str (:error result)))))
+      (transport/send transport (assoc base :status #{"done"})))))
 
 (defn wrap-eval-in-sci
   "处理 op \"eval-in-sci\"：:code 在 SCI 沙箱中求值，返回 :value/:err + :status done。"
   [handler]
-  (fn [{:keys [op transport code id] :as msg}]
+  (fn [{:keys [op transport code] :as msg}]
     (if (= "eval-in-sci" op)
-      (send-sci-result transport id (exec/eval-string (str code) {:capture-out? true}))
+      (send-sci-result transport msg (exec/eval-string (str code) {:capture-out? true}))
       (handler msg))))
 
 (mw/set-descriptor! #'wrap-eval-in-sci
@@ -40,9 +46,9 @@
 (defn wrap-eval-to-sci
   "把标准 eval 转成在 SCI 沙箱中执行，其它 op 交给默认 handler。用于 7889 端口，让 Cursor/Calva 连 7889 即得 SCI REPL。"
   [handler]
-  (fn [{:keys [op code transport id] :as msg}]
+  (fn [{:keys [op code transport] :as msg}]
     (if (= "eval" op)
-      (send-sci-result transport id (exec/eval-string (str code) {:capture-out? true}))
+      (send-sci-result transport msg (exec/eval-string (str code) {:capture-out? true}))
       (handler msg))))
 
 (defn sci-only-handler
