@@ -364,6 +364,37 @@
                  {:builder-fn rs/as-unqualified-lower-maps})]
       (mapv (fn [r] (row-payload->map code (get r :trade_date) (get r :row_payload) :cache)) rows))))
 
+(defn get-row-count-by-date-and-codes
+  "某交易日、给定代码在 DB 中的行数（含占位符）。用于 cross-signals 的 data_count。"
+  [trade-date ts-codes]
+  (when-let [ds (get-ds)]
+    (when (seq ts-codes)
+      (let [codes   (vec (map normalize-ts-code (distinct ts-codes)))
+            ph     (str/join ", " (repeat (count codes) "?"))
+            sql    (str "SELECT COUNT(*) AS n FROM k_line_daily WHERE trade_date = ? AND ts_code IN (" ph ")")
+            params (into [sql (str trade-date)] codes)
+            r      (jdbc/execute-one! ds (vec params) {:builder-fn rs/as-unqualified-lower-maps})]
+        (get r :n 0)))))
+
+(defn get-rows-by-date-and-codes-with-cross-type
+  "某交易日、给定代码中 cross_type = cross-type-str 且 row_payload 非占位符的行。用于金叉/死叉列表，过滤在 DB 完成。"
+  [trade-date ts-codes cross-type-str]
+  (when-let [ds (get-ds)]
+    (when (and (seq ts-codes) (str cross-type-str))
+      (let [codes   (vec (map normalize-ts-code (distinct ts-codes)))
+            ph     (str/join ", " (repeat (count codes) "?"))
+            sql    (str "SELECT ts_code, trade_date, row_payload, cross_type FROM k_line_daily WHERE trade_date = ? AND ts_code IN (" ph ") AND cross_type = ? AND row_payload != ?")
+            params (into [sql (str trade-date)] (concat codes [(str cross-type-str) (str placeholder)]))
+            rows   (jdbc/execute! ds (vec params) {:builder-fn rs/as-unqualified-lower-maps})]
+        (mapv (fn [r]
+                (let [rp (get r :row_payload)
+                      p  (when rp (try (edn/read-string rp) (catch Exception _ nil)))]
+                  {:ts_code    (get r :ts_code)
+                   :trade_date (get r :trade_date)
+                   :payload    p
+                   :cross_type (get r :cross_type)}))
+              rows)))))
+
 (defn count-calendar-days-in-range
   "返回 [start-ymd, end-ymd] 闭区间内的日历天数。供测试/调试。"
   [start-ymd end-ymd]

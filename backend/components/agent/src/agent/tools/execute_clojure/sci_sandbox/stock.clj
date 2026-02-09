@@ -248,3 +248,29 @@
                                                  short-period long-period)}])
                               ts-codes)]
             {:ok {:by_ts_code (into {} by-code)}}))))))
+
+(defn cross-signals-on-date
+  "某交易日、在给定股票代码中，从 DB 统计金叉/死叉信号（仅读缓存，无数据则不计）。
+   返回 {:summary {:stock_count _ :data_count _ :golden_cross_count _ :death_cross_count _}
+         :golden_cross [{:ts_code _ :ma {:ma5 _ :ma10 _ :ma20 _ :ma30 _ :ma60 _}} ...]
+         :death_cross [...]}。"
+  [stock-codes trade-date]
+  (let [trade-date (str trade-date)
+        ts-codes   (vec (distinct (map #(normalize-ts-code (str %)) (filter (complement str/blank?) (seq stock-codes)))))]
+    (if (empty? ts-codes)
+      {:summary {:stock_count 0 :data_count 0 :golden_cross_count 0 :death_cross_count 0}
+       :golden_cross [] :death_cross []}
+      (let [data-count (or (k-line-store/get-row-count-by-date-and-codes trade-date ts-codes) 0)
+            golden     (or (k-line-store/get-rows-by-date-and-codes-with-cross-type trade-date ts-codes "金叉") [])
+            death      (or (k-line-store/get-rows-by-date-and-codes-with-cross-type trade-date ts-codes "死叉") [])
+            ma-keys    [:ma5 :ma10 :ma20 :ma30 :ma60]
+            row->ma    (fn [r] (select-keys (:payload r) ma-keys))
+            summary    {:stock_count        (count ts-codes)
+                        :data_count         data-count
+                        :golden_cross_count (count golden)
+                        :death_cross_count  (count death)}
+            golden-list (mapv (fn [r] {:ts_code (:ts_code r) :ma (row->ma r)}) golden)
+            death-list  (mapv (fn [r] {:ts_code (:ts_code r) :ma (row->ma r)}) death)]
+        {:summary summary
+         :golden_cross golden-list
+         :death_cross  death-list}))))

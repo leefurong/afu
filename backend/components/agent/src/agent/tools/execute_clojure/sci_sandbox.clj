@@ -23,6 +23,7 @@
    'stock  {'get-daily-k-for-multiple-stocks stock/get-daily-k-for-multiple-stocks
             'ma-for-multiple-stocks       stock/ma-for-multiple-stocks
             'golden-cross-for-multiple-stocks stock/golden-cross-for-multiple-stocks
+            'cross-signals-on-date       stock/cross-signals-on-date
             'all-stock-codes (fn [] (stock-list-store/get-all-stock-codes))}
    'pprint {'pprint (fn pprint-to-sci-out [x]
                        "写入到 SCI 的 out，使 capture-out? 时出现在 :out 中。"
