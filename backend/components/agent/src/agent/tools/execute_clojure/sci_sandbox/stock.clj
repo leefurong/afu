@@ -319,42 +319,37 @@
            {:ok {:crosses crosses}}))))))
 
 (defn golden-cross-for-multiple-stocks
-  "多股票版金叉：对多只股票一次性取短期/长期 MA 并检测金叉。语义与 golden-cross 一致。
-   - stock-codes: 股票代码序列；short-period、long-period: 短期/长期 MA 周期；可选 till-date（默认最近交易日）、back-days（默认 5）。
+  "多股票版金叉：在 [date-from, date-to] 区间内检测短期均线上穿长期均线。
+   - stock-codes: 股票代码序列；short-period、long-period: 短期/长期 MA 周期；date-from、date-to: 日期闭区间 YYYYMMDD。
+   - 若区间内无交易日，该股票返回 {:crosses []}。
    返回 {:ok {:by_ts_code {\"000001.SZ\" {:crosses [...]} ...}}} 或 {:error _}。"
-  ([stock-codes short-period long-period]
-   (golden-cross-for-multiple-stocks stock-codes short-period long-period nil 5))
-  ([stock-codes short-period long-period till-date]
-   (golden-cross-for-multiple-stocks stock-codes short-period long-period till-date 5))
-  ([stock-codes short-period long-period till-date back-days]
-   (let [short-period (long short-period)
-         long-period  (long long-period)
-         ts-codes     (vec (distinct (map #(normalize-ts-code (str %)) (filter (complement str/blank?) (seq stock-codes)))))]
-     (cond
-       (empty? ts-codes) {:error "至少需要一只股票代码。"}
-       (< short-period 2) {:error "短期 MA 周期至少为 2。"}
-       (< long-period 2) {:error "长期 MA 周期至少为 2。"}
-       (>= short-period long-period) {:error "短期周期应小于长期周期（如 5 与 20）。"}
-       :else
-       (let [date-to   (if (str/blank? (str till-date))
-                         (k-line-store/effective-today-ymd)
-                         (str till-date))
-             date-from (when-let [d (parse-ymd date-to)]
-                         (date->str (minus-days (next-weekday d) 400)))
-             ma-short  (when date-from (ma-for-multiple-stocks ts-codes short-period date-from date-to))
-             ma-long   (when date-from (ma-for-multiple-stocks ts-codes long-period date-from date-to))]
-         (cond
-           (nil? date-from) {:error "截止日格式须为 YYYYMMDD。"}
-           (:error ma-short) ma-short
-           (:error ma-long)  ma-long
-           :else
-           (let [short-by   (get-in ma-short [:ok :by_ts_code])
-                 long-by    (get-in ma-long [:ok :by_ts_code])
-                 take-last-n (fn [items n] (vec (take-last n (or items []))))
-                 by-code    (map (fn [code]
-                                  [code {:crosses (crosses-from-ma-items
-                                                   (take-last-n (get-in short-by [code :items]) (long back-days))
-                                                   (take-last-n (get-in long-by [code :items]) (long back-days))
-                                                   short-period long-period)}])
-                                ts-codes)]
-             {:ok {:by_ts_code (into {} by-code)}})))))))
+  [stock-codes short-period long-period date-from date-to]
+  (let [short-period (long short-period)
+        long-period  (long long-period)
+        from-str     (str date-from)
+        to-str       (str date-to)
+        ts-codes     (vec (distinct (map #(normalize-ts-code (str %)) (filter (complement str/blank?) (seq stock-codes)))))]
+    (cond
+      (empty? ts-codes) {:error "至少需要一只股票代码。"}
+      (< short-period 2) {:error "短期 MA 周期至少为 2。"}
+      (< long-period 2) {:error "长期 MA 周期至少为 2。"}
+      (>= short-period long-period) {:error "短期周期应小于长期周期（如 5 与 20）。"}
+      (not (parse-ymd from-str)) {:error "date-from 格式须为 YYYYMMDD。"}
+      (not (parse-ymd to-str)) {:error "date-to 格式须为 YYYYMMDD。"}
+      (> (compare from-str to-str) 0) {:error "date-from 不能晚于 date-to。"}
+      :else
+      (let [ma-short (ma-for-multiple-stocks ts-codes short-period from-str to-str)
+            ma-long  (ma-for-multiple-stocks ts-codes long-period from-str to-str)]
+        (cond
+          (:error ma-short) ma-short
+          (:error ma-long)  ma-long
+          :else
+          (let [short-by (get-in ma-short [:ok :by_ts_code])
+                long-by  (get-in ma-long [:ok :by_ts_code])
+                by-code  (map (fn [code]
+                               [code {:crosses (crosses-from-ma-items
+                                                (or (get-in short-by [code :items]) [])
+                                                (or (get-in long-by [code :items]) [])
+                                                short-period long-period)}])
+                             ts-codes)]
+            {:ok {:by_ts_code (into {} by-code)}}))))))

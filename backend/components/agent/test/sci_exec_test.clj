@@ -181,15 +181,15 @@
 
 (deftest stock-golden-cross-for-multiple-stocks
   (testing "golden-cross-for-multiple-stocks empty codes returns error"
-    (let [res (se/eval-string "(stock/golden-cross-for-multiple-stocks [] 5 20)")]
+    (let [res (se/eval-string "(stock/golden-cross-for-multiple-stocks [] 5 20 \"20250101\" \"20250110\")")]
       (is (contains? res :ok))
       (is (= {:error "至少需要一只股票代码。"} (get-in res [:ok])))))
   (testing "golden-cross-for-multiple-stocks short >= long returns error"
-    (let [res (se/eval-string "(stock/golden-cross-for-multiple-stocks [\"000001\"] 20 5)")]
+    (let [res (se/eval-string "(stock/golden-cross-for-multiple-stocks [\"000001\"] 20 5 \"20250101\" \"20250110\")")]
       (is (contains? res :ok))
       (is (clojure.string/includes? (str (get-in res [:ok :error])) "短期周期应小于长期周期")))))
   (testing "golden-cross-for-multiple-stocks returns :ok with :by_ts_code when data available"
-    (let [res (se/eval-string "(stock/golden-cross-for-multiple-stocks [\"000001\" \"000002\"] 5 20 \"20250101\" 60)")]
+    (let [res (se/eval-string "(stock/golden-cross-for-multiple-stocks [\"000001\" \"000002\"] 5 20 \"20250101\" \"20250110\")")]
       (is (contains? res :ok))
       (let [inner (get res :ok)]
         (when (contains? inner :ok)
