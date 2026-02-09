@@ -328,6 +328,13 @@
                 {:builder-fn rs/as-unqualified-lower-maps})]
       (get r :n 0))))
 
+(defn insert-daily-rows-for-test!
+  "仅用于测试：向 k_line_daily 插入指定 ts_code 的若干行。
+   date-rows: [[\"YYYYMMDD\" {:close 10.0 :open 9.8 ...}] ...]，payload 需含 :close（及可选 :open :high :low 等）。"
+  [ts-code date-rows]
+  (when-let [ds (get-ds)]
+    (insert-rows! ds (normalize-ts-code ts-code) date-rows)))
+
 ;; ---------------------------------------------------------------------------
 ;; Cron：每日拓展
 ;; ---------------------------------------------------------------------------

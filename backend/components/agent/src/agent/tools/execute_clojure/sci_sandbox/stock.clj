@@ -131,10 +131,12 @@
           {:ok {:items []}}
           :else
           (let [i-start   (max 0 (- i-date-from (dec ma-days)))
-                slice     (subvec items-asc i-start (inc i-end))]
+                slice     (subvec items-asc i-start (inc i-end))
+                ;; simple-moving-average 假定日期升序（最早在前），前 (dec ma-days) 个为 nil；故用升序 slice 计算
+                slice-asc (vec (reverse slice))]
             (if (< (count slice) ma-days)
               {:error (str "无法在 " from-str " 前取到足够 " ma-days " 日数据以计算 MA。")}
-              (let [closes   (mapv (fn [row] (parse-close (:close row))) slice)
+              (let [closes   (mapv (fn [row] (parse-close (:close row))) slice-asc)
                     ma-vals  (simple-moving-average closes ma-days)
                     ma-kw    (keyword (str "ma" ma-days))
                     out-items (into []
@@ -147,7 +149,7 @@
                                                        {:trade_date (str (:trade_date row))
                                                         :close     (nth closes i)
                                                         ma-kw      m})))
-                                   slice))]
+                                   slice-asc))]
                 {:ok {:items out-items}}))))))))
 
 (defn ma-for-multiple-stocks
@@ -176,7 +178,7 @@
            :else
            (let [by-code   (group-by :ts_code all-rows)
                  results   (map (fn [code]
-                                  (let [rows   (get by-code code [])
+                                  (let [rows   (sort-by #(str (:trade_date %)) (get by-code code []))
                                         payload {:fields default-daily-fields
                                                  :items  (mapv #(update % :trade_date str) rows)}
                                         res    (ma-from-payload-by-range payload ma-days from-str to-str)]
