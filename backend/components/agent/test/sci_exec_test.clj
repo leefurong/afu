@@ -111,13 +111,13 @@
       (is (string? (get-in res [:ok :error]))))))
 
 (deftest stock-ma
-  (testing "stock/ma with days < 2 returns error"
+  (testing "stock/ma with period < 2 returns error"
     (let [res (se/eval-string "(stock/ma \"000001\" 1)")]
       (is (contains? res :ok))
-      (is (= {:error "MA 周期 days 至少为 2。"} (get-in res [:ok])))))
+      (is (= {:error "MA 周期至少为 2。"} (get-in res [:ok])))))
 
-  ;; 三种用法：days + 可选 beg-date、bar-count
-  ;; 1) 今天的 MA5：days=5，beg-date 不设，bar-count 不设 → 最后一行为最近交易日，最后一行的 ma 即「今天的 MA5」
+  ;; 三种用法：period + 可选 beg-date、bar-count
+  ;; 1) 今天的 MA5：period=5，beg-date 不设，bar-count 不设 → 最后一行为最近交易日，最后一行的 ma 即「今天的 MA5」
   (testing "today's MA5: (ma stock-code 5) — no beg-date, no bar-count; last row is latest trading day, last row ma is today's MA5"
     (let [res (se/eval-string "(stock/ma \"000001\" 5)")]
       (is (contains? res :ok))
@@ -147,6 +147,25 @@
             items   (get payload :items)]
         (when payload
           (is (= 2 (count items)) "bar-count=2 => exactly 2 rows"))))))
+
+(deftest stock-ma-for-multiple-stocks
+  (testing "ma-for-multiple-stocks empty codes returns error"
+    (let [res (se/eval-string "(stock/ma-for-multiple-stocks [] 5)")]
+      (is (contains? res :ok))
+      (is (= {:error "至少需要一只股票代码。"} (get-in res [:ok])))))
+  (testing "ma-for-multiple-stocks period < 2 returns error"
+    (let [res (se/eval-string "(stock/ma-for-multiple-stocks [\"000001\"] 1)")]
+      (is (contains? res :ok))
+      (is (= {:error "MA 周期至少为 2。"} (get-in res [:ok])))))
+  (testing "ma-for-multiple-stocks returns :ok with :by_ts_code when data available"
+    (let [res (se/eval-string "(stock/ma-for-multiple-stocks [\"000001\" \"000002\"] 5 \"20250101\" 2)")]
+      (is (contains? res :ok))
+      (let [inner (get res :ok)]
+        (when (contains? inner :ok)
+          (let [by-code (get-in inner [:ok :by_ts_code])]
+            (is (map? by-code) "by_ts_code is a map")
+            (when (seq by-code)
+              (is (every? (fn [[_k v]] (contains? v :items)) (seq by-code)) "each entry has :items"))))))))
 
 (deftest stock-golden-cross
   (testing "golden-cross returns :ok with :crosses vector (calls ma twice)"

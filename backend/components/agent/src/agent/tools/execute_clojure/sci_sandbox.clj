@@ -19,8 +19,9 @@
    'json   {'parse-string json/parse-string
             'write-str    json/write-str}
    'env    {'get-env env/get-env}
-   'stock  {'get-k           stock/get-k
-            'ma              stock/ma
-            'golden-cross    stock/golden-cross
+   'stock  {'get-k                  stock/get-k
+            'ma                     stock/ma
+            'ma-for-multiple-stocks stock/ma-for-multiple-stocks
+            'golden-cross           stock/golden-cross
             'all-stock-codes (fn [] (stock-list-store/get-all-stock-codes))}
    'pprint {'pprint pprint/pprint}})

@@ -9,6 +9,10 @@
 
 (def ^:private basic-iso DateTimeFormatter/BASIC_ISO_DATE)
 
+(def ^:private default-daily-fields
+  "与 k-line-store 日 K 返回的 :fields 一致，用于 ma-for-multiple-stocks 构建 payload。"
+  ["ts_code" "trade_date" "open" "high" "low" "close" "pre_close" "change" "pct_chg" "vol" "amount"])
+
 (defn- parse-ymd
   "将 YYYYMMDD 字符串转为 LocalDate。"
   [s]
@@ -155,21 +159,21 @@
             {:ok {:items out-items}}))))))
 
 (defn ma
-  "计算日 K 收盘价的 N 日简单移动平均。语义：截止日 till-date，往前取 back-days 个交易日。
-   - stock-code: 股票代码；days: MA 周期（如 5、10、20、60）。
+  "计算日 K 收盘价的 N 周期简单移动平均。语义：截止日 till-date，往前取 back-days 个交易日。
+   - stock-code: 股票代码；period: MA 周期（如 5、10、20、60）。
    - till-date: 截止日 YYYYMMDD（含）；不传则用「最近交易日」。
    - back-days: 从 till-date 往前取多少个交易日，默认 1（就取截止日当天）。
    用法：今天 MA5 → (ma \"000001\" 5)；某日当天 → (ma \"000001\" 5 \"20260206\")；某日及前 4 天 → (ma \"000001\" 5 \"20260206\" 5)。
    返回 {:ok {:items [{:trade_date \"...\" :close x :maN y} ...]}} 按日期升序（最早一天在前）。"
-  ([stock-code days]
-   (ma stock-code days nil 1))
-  ([stock-code days till-date]
-   (ma stock-code days till-date 1))
-  ([stock-code days till-date back-days]
-   (let [ma-days    (long days)
+  ([stock-code period]
+   (ma stock-code period nil 1))
+  ([stock-code period till-date]
+   (ma stock-code period till-date 1))
+  ([stock-code period till-date back-days]
+   (let [ma-days    (long period)
          back-days  (if (or (nil? back-days) (neg? (long back-days))) 1 (long back-days))]
      (cond
-       (< ma-days 2) {:error "MA 周期 days 至少为 2。"}
+       (< ma-days 2) {:error "MA 周期至少为 2。"}
        (and till-date (not (parse-ymd till-date))) {:error "截止日格式须为 YYYYMMDD。"}
        :else
        (let [start-d   (if till-date
@@ -184,6 +188,48 @@
            (:error k) k
            (nil? start-d) {:error "截止日格式须为 YYYYMMDD。"}
            :else (ma-from-payload (:ok k) ma-days back-days till-date)))))))
+
+(defn ma-for-multiple-stocks
+  "多股票版 MA：对多只股票一次性取日 K 并计算 N 周期移动平均。语义与 ma 一致：截止日 till-date，往前 back-days 个交易日。
+   - stock-codes: 股票代码序列（如 [\"000001\" \"000002\"]）；period: MA 周期；可选 till-date、back-days。
+   返回 {:ok {:by_ts_code {\"000001.SZ\" {:items [...]} \"000002.SZ\" {:items [...]} ...}}} 或 {:error _}。"
+  ([stock-codes period]
+   (ma-for-multiple-stocks stock-codes period nil 1))
+  ([stock-codes period till-date]
+   (ma-for-multiple-stocks stock-codes period till-date 1))
+  ([stock-codes period till-date back-days]
+   (let [ma-days    (long period)
+         back-days  (if (or (nil? back-days) (neg? (long back-days))) 1 (long back-days))
+         ts-codes   (vec (distinct (map #(normalize-ts-code (str %)) (filter (complement str/blank?) (seq stock-codes)))))]
+     (cond
+       (empty? ts-codes) {:error "至少需要一只股票代码。"}
+       (< ma-days 2) {:error "MA 周期至少为 2。"}
+       (and till-date (not (parse-ymd till-date))) {:error "截止日格式须为 YYYYMMDD。"}
+       :else
+       (let [start-d   (if till-date
+                         (when-let [d (parse-ymd till-date)]
+                           (date->str (minus-days (next-weekday d) 400)))
+                         (date->str (minus-days (LocalDate/now) 400)))
+             date-to   (if till-date
+                         (if (string? till-date) till-date (date->str till-date))
+                         (k-line-store/effective-today-ymd))
+             all-rows  (when start-d (k-line-store/get-daily-k-for-multiple-stocks ts-codes start-d date-to))]
+         (cond
+           (nil? all-rows) {:error "K 线缓存未初始化"}
+           (nil? start-d) {:error "截止日格式须为 YYYYMMDD。"}
+           :else
+           (let [by-code   (group-by :ts_code all-rows)
+                 results   (map (fn [code]
+                                  (let [rows   (get by-code code [])
+                                        payload {:fields default-daily-fields
+                                                 :items  (mapv #(update % :trade_date str) rows)}
+                                        res    (ma-from-payload payload ma-days back-days till-date)]
+                                    [code res]))
+                               ts-codes)
+                 first-err (first (keep (fn [[_code res]] (when (:error res) res)) results))]
+             (if first-err
+               first-err
+               {:ok {:by_ts_code (into {} (map (fn [[code res]] [code (:ok res)]) results))}}))))))))
 
 (defn golden-cross
   "检测短期均线上穿长期均线（金叉）。语义与 ma 一致：截止日 till-date，往前 back-days 天。
