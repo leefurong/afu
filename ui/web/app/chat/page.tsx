@@ -200,6 +200,7 @@ function formatOkForDisplay(ok: unknown): string {
   if (ok === null || ok === undefined) return "成功";
   if (typeof ok === "string") return ok;
   if (typeof ok === "number" || typeof ok === "boolean") return String(ok);
+  if (typeof ok === "object") return JSON.stringify(ok, null, 2);
   return "成功";
 }
 
