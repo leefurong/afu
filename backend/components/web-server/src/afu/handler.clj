@@ -153,7 +153,8 @@
                                               backend (store.datomic/->datomic-store conn [:message/id msg-id] :message/sci-context-snapshot)]
                                           (store/save-snapshot! backend snapshot))
                                         (catch Throwable ex
-                                          (println "[chat] save sci-context-snapshot failed:" (.getMessage ex)))))))))))))
+                                          (println "[chat] save sci-context-snapshot failed:" (.getMessage ex)
+                                                   "| ex-data:" (ex-data ex)))))))))))))
                     (when (and conn v (some? (:agent-id v)))
                       (agentmanager/save-agent! conn v))
                     (catch Throwable t

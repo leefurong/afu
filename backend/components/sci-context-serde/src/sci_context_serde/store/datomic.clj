@@ -75,7 +75,15 @@
                                       (into retract-tx chunk-tx)))))
                               blobs))
             root-datom [[:db/add lookup-ref attr root-str]]
-            tx-data (into (vec (or blob-tx [])) root-datom)]
+            tx-data (into (vec (or blob-tx [])) root-datom)
+            _ (when (seq tx-data)
+                (let [existing (get (d/pull db [attr] lookup-ref) attr)
+                      blob-count (count (or blobs {}))
+                      hash-count (count (distinct (keys (or blobs {}))))]
+                  (println "[sci-context-snapshot] transact: lookup-ref" lookup-ref
+                           "| message already has attr?" (some? existing)
+                           "| blobs" blob-count "| distinct hashes" hash-count
+                           "| tx-data count" (count tx-data))))]
         (when (seq tx-data)
           (d/transact conn {:tx-data tx-data}))
         true)))
