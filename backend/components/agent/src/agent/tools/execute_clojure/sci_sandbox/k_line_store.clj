@@ -454,6 +454,21 @@
 (defn- payload-for-db [row]
   (dissoc row :ts_code :trade_date :source))
 
+(defn ensure-range-and-update-ma-for-codes!
+  "对 ts-codes 在 trade-date 所在日确保有日 K 并计算 MA/金叉死叉写回。区间为 [trade-date-60日, trade-date]。
+   逐只 extend 再异步 update MA。供 cross-signals-on-date 在 data_count < 1000 时异步触发，不阻塞请求。"
+  [ts-codes trade-date]
+  (when-let [ds (get-ds)]
+    (when (seq ts-codes)
+      (let [trade-date (str trade-date)
+            left       (date-str (.minus (parse-ymd trade-date) 60 ChronoUnit/DAYS))]
+        (doseq [code (distinct (map normalize-ts-code ts-codes))]
+          (when-let [res (extend-to-cover! ds code left trade-date)]
+            (when-not (:error res)
+              (let [bounds          (cache-bounds ds code)
+                    extended-left?  (= (:left bounds) left)]
+                (future (update-ma-for-stock-date-range! code left trade-date extended-left?))))))))))
+
 (defn update-ma-for-stock-date-range!
   "对 ts-code 在 [date-from, date-to] 内的缓存行计算 MA5/10/20/30/60 与金叉/死叉并写回。
    extended-left? 为 true 时，date-to 扩展为 min(今日, date-from 起第 60 个交易日)，因补左边后最多需 59 个交易日才有 MA60。"

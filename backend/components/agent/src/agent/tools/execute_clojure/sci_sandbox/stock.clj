@@ -247,6 +247,8 @@
                                                  (or (get-in long-by [code :items]) [])
                                                  short-period long-period)}])
                               ts-codes)]
+            (doseq [code ts-codes]
+              (future (k-line-store/update-ma-for-stock-date-range! code from-str to-str false)))
             {:ok {:by_ts_code (into {} by-code)}}))))))
 
 (def ^:private max-per-page 500)
@@ -267,7 +269,7 @@
   "某交易日、在给定股票代码中，从 DB 统计金叉/死叉信号（仅读缓存，无数据则不计）。
    只返回股票代码 {:ts_code _}，不包含 MA；需详情可再调 golden-cross 等。分页默认第 1 页，每页最多 500 条。
    opts：:page（默认 1）、:per-page（默认 500，最大 500）。
-   返回 {:summary _ :pagination _ :golden_cross _ :death_cross _}。"
+   返回 {:summary _ :pagination _ :golden_cross _ :death_cross _}；summary 含 :backfill_triggered，为 true 表示已触发异步补数。"
   ([stock-codes trade-date]
    (cross-signals-on-date stock-codes trade-date nil))
   ([stock-codes trade-date opts]
@@ -278,10 +280,13 @@
          page         (max 1 (int (:page opts)))
          per-page     (min max-per-page (max 1 (int (:per-page opts))))]
      (if (empty? ts-codes)
-       {:summary     {:stock_count 0 :data_count 0 :golden_cross_count 0 :death_cross_count 0}
+       {:summary     {:stock_count 0 :data_count 0 :backfill_triggered false :golden_cross_count 0 :death_cross_count 0}
         :pagination  {:total_pages 0 :per_page per-page :current_page 1 :total_golden_cross 0 :total_death_cross 0}
         :golden_cross [] :death_cross []}
        (let [data-count   (or (k-line-store/get-row-count-by-date-and-codes trade-date ts-codes) 0)
+             backfill?    (and (< data-count 1000) (seq ts-codes))
+             _            (when backfill?
+                            (future (k-line-store/ensure-range-and-update-ma-for-codes! ts-codes trade-date)))
              golden       (or (k-line-store/get-rows-by-date-and-codes-with-cross-type trade-date ts-codes "金叉") [])
              death        (or (k-line-store/get-rows-by-date-and-codes-with-cross-type trade-date ts-codes "死叉") [])
              golden-list  (mapv (fn [r] {:ts_code (:ts_code r)}) golden)
@@ -294,6 +299,7 @@
              page         (min page (max 1 total-pages))
              summary      {:stock_count        (count ts-codes)
                            :data_count         data-count
+                           :backfill_triggered backfill?
                            :golden_cross_count g-total
                            :death_cross_count  d-total}
              pagination   {:total_pages       total-pages
