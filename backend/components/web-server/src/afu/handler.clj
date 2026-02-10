@@ -260,8 +260,9 @@
                (fn [out]
                  (try
                    (println "[chat] stream producer started, reading from ch ...")
+                   ;; 编辑或续写后都切换到新写的那条线：update-main-head? 恒为 true，让父的 selected-next-id 指向新消息
                    (write-event-ch-to-stream ch out conn conv-id (or user-text "") branch-head
-                                             (and (nil? prev-msg-id) (not branch-from-root?))
+                                             true
                                              branch-from-root?)
                    (println "[chat] stream producer finished (ch closed)")
                    (catch Throwable t
