@@ -326,6 +326,16 @@
                      [])]
     (concat left-rows daily-k-rows right-rows)))
 
+(defn get-daily-k-for-multiple-stocks-from-cache-only
+  "Public. 仅从缓存读取 [date-from, date-to] 内多只股票的日 K，不触发同步补数。用于「先本地取、缺则异步补」模式。
+   返回与 get-daily-k-for-multiple-stocks 相同结构的序列（已排除占位符），未初始化时 nil。"
+  [codes date-from date-to]
+  (when (seq codes)
+    (when-let [_ds (get-ds)]
+      (let [normalized (vec (map normalize-ts-code (distinct codes)))
+            all-cache  (get-daily-k-in-cache normalized (str date-from) (str date-to))]
+        (filter (complement :placeholder) all-cache)))))
+
 (defn get-daily-k-for-multiple-stocks
   "Public. 先按 codes + date-from + date-to 批量从缓存取数，再对每个 code 用 ensure-daily-k 补全左右缺段，合并后排除非交易日返回。"
   [codes date-from date-to]
@@ -468,6 +478,21 @@
               (let [bounds          (cache-bounds ds code)
                     extended-left?  (= (:left bounds) left)]
                 (future (update-ma-for-stock-date-range! code left trade-date extended-left?))))))))))
+
+(defn ensure-range-and-update-ma-for-codes-range!
+  "对 ts-codes 在 [date-from, date-to] 区间确保有日 K 并计算 MA/金叉死叉写回。逐只 extend 再异步 update MA。
+   供 get-daily-k 等在「仅读缓存、发现数据不足」时异步触发，不阻塞请求。"
+  [ts-codes date-from date-to]
+  (when-let [ds (get-ds)]
+    (when (seq ts-codes)
+      (let [date-from (str date-from)
+            date-to   (str date-to)]
+        (doseq [code (distinct (map normalize-ts-code ts-codes))]
+          (when-let [res (extend-to-cover! ds code date-from date-to)]
+            (when-not (:error res)
+              (let [bounds          (cache-bounds ds code)
+                    extended-left?  (= (:left bounds) date-from)]
+                (future (update-ma-for-stock-date-range! code date-from date-to extended-left?))))))))))
 
 (defn update-ma-for-stock-date-range!
   "对 ts-code 在 [date-from, date-to] 内的缓存行计算 MA5/10/20/30/60 与金叉/死叉并写回。

@@ -56,9 +56,8 @@
   (tushare/request-tushare-api api-name params))
 
 (defn get-daily-k-for-multiple-stocks
-  "多股票日 K：在 [date-from, date-to] 区间内获取多只股票的日 K 线。
-   - stock-codes: 股票代码序列（如 [\"000001\" \"000002\"]）；date-from、date-to: 日期闭区间 YYYYMMDD。
-   - 返回 {:ok {:fields _ :by_ts_code {\"000001.SZ\" [{:trade_date _ :close _ :open _ ...} ...]} ...}} 或 {:error _}。未初始化时 {:error \"K 线缓存未初始化\"}。"
+  "多股票日 K：仅从本地缓存读取 [date-from, date-to]；若数据条数不足 1000 会异步触发补数并算 MA 写库，本次仍只返回当前缓存。
+   - 返回 {:ok {:fields _ :by_ts_code _ :backfill_triggered _}} 或 {:error _}；:backfill_triggered 为 true 表示已触发异步补数。"
   [stock-codes date-from date-to]
   (let [from-str (str date-from)
         to-str   (str date-to)
@@ -69,14 +68,18 @@
       (not (parse-ymd to-str)) {:error "date-to 格式须为 YYYYMMDD。"}
       (> (compare from-str to-str) 0) {:error "date-from 不能晚于 date-to。"}
       :else
-      (let [rows (k-line-store/get-daily-k-for-multiple-stocks ts-codes from-str to-str)]
+      (let [rows      (k-line-store/get-daily-k-for-multiple-stocks-from-cache-only ts-codes from-str to-str)
+            backfill? (and (some? rows) (< (count rows) 1000) (seq ts-codes))]
+        (when backfill?
+          (future (k-line-store/ensure-range-and-update-ma-for-codes-range! ts-codes from-str to-str)))
         (if (nil? rows)
           {:error "K 线缓存未初始化"}
-          {:ok {:fields default-daily-fields
-                :by_ts_code (into {}
-                                  (map (fn [[code items]]
-                                         [code (mapv #(update % :trade_date str) items)])
-                                       (group-by :ts_code rows)))}})))))
+          {:ok {:fields             default-daily-fields
+                :by_ts_code          (into {}
+                                           (map (fn [[code items]]
+                                                  [code (mapv #(update % :trade_date str) items)])
+                                                (group-by :ts_code rows)))
+                :backfill_triggered  (boolean backfill?)}})))))
 
 (defn- field-index
   [fields name]
@@ -153,10 +156,8 @@
                 {:ok {:items out-items}}))))))))
 
 (defn ma-for-multiple-stocks
-  "多股票版 MA：对多只股票一次性取日 K，计算 [date-from, date-to] 区间内每个交易日的 period 日移动平均。
-   - stock-codes: 股票代码序列（如 [\"000001\" \"000002\"]）；period: MA 周期（如 5、10、20）。
-   - date-from, date-to: 日期闭区间 YYYYMMDD。3 参数时 (stock-codes period date) 表示单日。
-   返回 {:ok {:by_ts_code {\"000001.SZ\" {:items [...]} \"000002.SZ\" {:items [...]} ...}}} 或 {:error _}。"
+  "多股票版 MA：仅从本地缓存取日 K，现算 [date-from, date-to] 区间内 period 日 MA；数据不足时异步补数。
+   返回 {:ok {:by_ts_code _ :backfill_triggered _}} 或 {:error _}。"
   ([stock-codes period date-from date-to]
    (let [ma-days   (long period)
          ts-codes  (vec (distinct (map #(normalize-ts-code (str %)) (filter (complement str/blank?) (seq stock-codes)))))
@@ -169,44 +170,61 @@
        (not (parse-ymd to-str)) {:error "date-to 格式须为 YYYYMMDD。"}
        (> (compare from-str to-str) 0) {:error "date-from 不能晚于 date-to。"}
        :else
-       (let [start-d  (when-let [d (parse-ymd from-str)]
-                        (date->str (minus-days (next-weekday d) 400)))
-             all-rows  (when start-d (k-line-store/get-daily-k-for-multiple-stocks ts-codes start-d to-str))]
+       (let [start-d   (when-let [d (parse-ymd from-str)]
+                         (date->str (minus-days (next-weekday d) 400)))
+             rows      (when start-d (k-line-store/get-daily-k-for-multiple-stocks-from-cache-only ts-codes start-d to-str))]
          (cond
-           (nil? all-rows) {:error "K 线缓存未初始化"}
            (nil? start-d) {:error "date-from 格式须为 YYYYMMDD。"}
+           (nil? rows) {:error "K 线缓存未初始化"}
            :else
-           (let [by-code   (group-by :ts_code all-rows)
+           (let [by-code   (group-by :ts_code rows)
                  results   (map (fn [code]
-                                  (let [rows   (sort-by #(str (:trade_date %)) (get by-code code []))
-                                        payload {:fields default-daily-fields
-                                                 :items  (mapv #(update % :trade_date str) rows)}
-                                        res    (ma-from-payload-by-range payload ma-days from-str to-str)]
+                                  (let [code-rows (sort-by #(str (:trade_date %)) (get by-code code []))
+                                        payload   {:fields default-daily-fields
+                                                   :items  (mapv #(update % :trade_date str) code-rows)}
+                                        res      (ma-from-payload-by-range payload ma-days from-str to-str)]
                                     [code res]))
                                 ts-codes)
-                 first-err (first (keep (fn [[_code res]] (when (:error res) res)) results))]
+                 first-err (first (keep (fn [[_code res]] (when (:error res) res)) results))
+                 backfill? (and (< (count rows) 1000) (seq ts-codes))]
+             (when backfill?
+               (future (k-line-store/ensure-range-and-update-ma-for-codes-range! ts-codes start-d to-str)))
              (if first-err
                first-err
-               {:ok {:by_ts_code (into {} (map (fn [[code res]] [code (:ok res)]) results))}})))))))
+               {:ok {:by_ts_code         (into {} (map (fn [[code res]] [code (:ok res)]) results))
+                     :backfill_triggered (boolean backfill?)}})))))))
   ([stock-codes period date]
    (ma-for-multiple-stocks stock-codes period (str date) (str date))))
 
+(defn- align-ma-items-by-date
+  "将 short-items 与 long-items 按 trade_date 对齐，仅保留两段均有的日期并排序，返回 [short-aligned long-aligned]。"
+  [short-items long-items]
+  (let [short-by-date (into {} (map (fn [r] [(str (:trade_date r)) r]) short-items))
+        long-by-date  (into {} (map (fn [r] [(str (:trade_date r)) r]) long-items))
+        common-dates  (sort (filter #(and (get short-by-date %) (get long-by-date %))
+                                   (into #{} (concat (map #(str (:trade_date %)) short-items)
+                                                     (map #(str (:trade_date %)) long-items)))))
+        short-aligned (mapv #(get short-by-date %) common-dates)
+        long-aligned  (mapv #(get long-by-date %) common-dates)]
+    [short-aligned long-aligned]))
+
 (defn- crosses-from-ma-items
-  "根据短期、长期 MA 的 items（均按 trade_date 升序）检测金叉，返回 [{:date _ :ma5 _ :ma20 _} ...]（key 为 ma{short-period}, ma{long-period}）。"
+  "根据短期、长期 MA 的 items（按 trade_date 对齐后）检测金叉，返回 [{:date _ :ma5 _ :ma20 _} ...]（key 为 ma{short-period}, ma{long-period}）。"
   [short-items long-items short-period long-period]
-  (let [skw (keyword (str "ma" short-period))
-        lkw (keyword (str "ma" long-period))
-        n   (min (count short-items) (count long-items))]
+  (let [skw    (keyword (str "ma" short-period))
+        lkw    (keyword (str "ma" long-period))
+        [s l]  (align-ma-items-by-date short-items long-items)
+        n      (count s)]
     (if (< n 2)
       []
       (into []
             (comp
              (map (fn [i]
-                    (let [prev-s (get (nth short-items (dec i)) skw)
-                          prev-l (get (nth long-items (dec i)) lkw)
-                          curr-s (get (nth short-items i) skw)
-                          curr-l (get (nth long-items i) lkw)
-                          d     (:trade_date (nth short-items i))]
+                    (let [prev-s (get (nth s (dec i)) skw)
+                          prev-l (get (nth l (dec i)) lkw)
+                          curr-s (get (nth s i) skw)
+                          curr-l (get (nth l i) lkw)
+                          d     (:trade_date (nth s i))]
                       (when (and (number? prev-s) (number? prev-l) (number? curr-s) (number? curr-l)
                                  (<= prev-s prev-l) (> curr-s curr-l))
                         (assoc {:date d} skw curr-s lkw curr-l)))))

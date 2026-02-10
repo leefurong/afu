@@ -112,31 +112,25 @@
     (let [res (se/eval-string "(stock/ma-for-multiple-stocks [\"000001\"] 1 \"20250101\" \"20250110\")")]
       (is (contains? res :ok))
       (is (= {:error "MA 周期至少为 2。"} (get-in res [:ok])))))
-  (testing "ma-for-multiple-stocks returns :ok with :by_ts_code when data available"
+  (testing "ma-for-multiple-stocks returns :ok with :by_ts_code and :backfill_triggered when data available"
     (let [res (se/eval-string "(stock/ma-for-multiple-stocks [\"000001\" \"000002\"] 5 \"20250101\" \"20250110\")")]
       (is (contains? res :ok))
       (let [inner (get res :ok)]
-        (when (contains? inner :ok)
-          (let [by-code (get-in inner [:ok :by_ts_code])]
+        (when (contains? inner :by_ts_code)
+          (let [by-code (get inner :by_ts_code)]
             (is (map? by-code) "by_ts_code is a map")
             (when (seq by-code)
-              (is (every? (fn [[_k v]] (contains? v :items)) (seq by-code)) "each entry has :items"))))))))
+              (is (every? (fn [[_k v]] (contains? v :items)) (seq by-code)) "each entry has :items")))
+        (is (contains? inner :backfill_triggered) "response includes :backfill_triggered")))))))
 
-(deftest stock-golden-cross-for-multiple-stocks
-  (testing "golden-cross-for-multiple-stocks empty codes returns error"
-    (let [res (se/eval-string "(stock/golden-cross-for-multiple-stocks [] 5 20 \"20250101\" \"20250110\")")]
-      (is (contains? res :ok))
-      (is (= {:error "至少需要一只股票代码。"} (get-in res [:ok])))))
-  (testing "golden-cross-for-multiple-stocks short >= long returns error"
-    (let [res (se/eval-string "(stock/golden-cross-for-multiple-stocks [\"000001\"] 20 5 \"20250101\" \"20250110\")")]
-      (is (contains? res :ok))
-      (is (clojure.string/includes? (str (get-in res [:ok :error])) "短期周期应小于长期周期")))))
-  (testing "golden-cross-for-multiple-stocks returns :ok with :by_ts_code when data available"
-    (let [res (se/eval-string "(stock/golden-cross-for-multiple-stocks [\"000001\" \"000002\"] 5 20 \"20250101\" \"20250110\")")]
+(deftest stock-cross-signals-on-date
+  "cross-signals-on-date 已暴露给 SCI；golden-cross-for-multiple-stocks 已从 SCI 移除。"
+  (testing "cross-signals-on-date returns summary with backfill_triggered and golden_cross/death_cross"
+    (let [res (se/eval-string "(stock/cross-signals-on-date [\"000001\" \"000002\"] \"20250115\")")]
       (is (contains? res :ok))
       (let [inner (get res :ok)]
-        (when (contains? inner :ok)
-          (let [by-code (get-in inner [:ok :by_ts_code])]
-            (is (map? by-code) "by_ts_code is a map")
-            (when (seq by-code)
-              (is (every? (fn [[_k v]] (contains? v :crosses)) (seq by-code)) "each entry has :crosses"))))))))
+        (when (map? inner)
+          (is (contains? inner :summary) "response has :summary")
+          (is (contains? (get inner :summary) :backfill_triggered) "summary has :backfill_triggered")
+          (is (contains? inner :golden_cross) "response has :golden_cross")
+          (is (contains? inner :death_cross) "response has :death_cross"))))))
