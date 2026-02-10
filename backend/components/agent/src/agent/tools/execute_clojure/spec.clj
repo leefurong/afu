@@ -27,7 +27,10 @@
                        "6) 如需其他外部数据，可用 http + json + env：例如 Tushare 可 POST http://api.tushare.pro，body 为 JSON（api_name、token、params），返回用 json/parse-string 解析。\n"
                        "7) pprint：(pprint/pprint x) 格式化打印，便于查看复杂结构。\n\n"
                        "禁止：require/import、Java 互操作、eval/load-file/slurp/spit/read-string 等。\n\n"
-                       "入参为 code（字符串）。返回 {:ok 你的最后一条s-expression的执行结果} 或 {:error 错误信息}，可能带 :out。")
+                       "入参为 code（字符串）。返回说明：\n"
+                       "- :ok — 最后一条 s-expression 的执行结果（成功时必有）。\n"
+                       "- :out — stdout 输出（如 (pprint/pprint x) 的格式化打印等）。\n"
+                       "简单场景下 :ok 已包含结果，可直接使用，不一定需要 pprint；复杂结构需要可读展示时再用 pprint。失败时返回 {:error 错误信息}。")
      :parameters {:type "object"
                   :properties {:code {:type "string"
                                      :description (str "要执行的 Clojure (SCI) 代码。仅限 SCI 子集：clojure.core 常用函数 + http/json/env/stock/pprint，不可 require、不可 Java 互操作。环境变量名仅限：" wl "。")}}
