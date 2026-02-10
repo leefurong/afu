@@ -50,24 +50,6 @@
     (str/starts-with? (str s) "6") (str s ".SH")
     :else (str s ".SZ")))
 
-(defn- rows-cover-range?
-  "code-rows 为某只股票在 get-daily-k-for-multiple-stocks-from-cache-only 返回中的行。
-   若其最早、最晚 trade_date 覆盖 [want-from, want-to]（闭区间）则返回 true，否则 false。"
-  [code-rows want-from want-to]
-  (when (seq code-rows)
-    (let [dates (mapv #(str (:trade_date %)) code-rows)
-          min-d (apply min dates)
-          max-d (apply max dates)]
-      (and (<= (compare min-d (str want-from)) 0)
-           (>= (compare max-d (str want-to)) 0)))))
-
-(defn- cache-covers-range?
-  "rows 为 from-cache-only 返回的序列，by-code 为 (group-by :ts_code rows)。
-   当每只股票的返回数据都覆盖 [want-from, want-to] 时返回 true。"
-  [rows by-code ts-codes want-from want-to]
-  (and (some? rows) (seq ts-codes)
-       (every? #(rows-cover-range? (get by-code % []) want-from want-to) ts-codes)))
-
 (defn request-tushare-api
   "供其他 ns 调用的 Tushare 请求。委托给 tushare ns。"
   [api-name params]
@@ -88,7 +70,18 @@
       :else
       (let [rows        (k-line-store/get-daily-k-for-multiple-stocks-from-cache-only ts-codes from-str to-str)
             by-code     (when rows (group-by :ts_code rows))
-            sufficient? (cache-covers-range? rows by-code ts-codes from-str to-str)
+            ;; 每只股票缓存的 [min-date, max-date] 是否覆盖 [from-str, to-str]，用 compare 做字符串日期比较
+            sufficient? (and (some? rows) (seq ts-codes)
+                            (every? (fn [code]
+                                      (let [code-rows (get by-code code [])
+                                            str-dates (mapv #(str (get % :trade_date)) code-rows)]
+                                        (and (seq str-dates)
+                                             (let [sorted (sort str-dates)
+                                                   min-d  (first sorted)
+                                                   max-d  (last sorted)]
+                                               (and (<= (compare min-d from-str) 0)
+                                                    (>= (compare max-d to-str) 0))))))
+                                    ts-codes))
             backfill?   (and (some? rows) (seq ts-codes) (not sufficient?))]
         (when backfill?
           (future (k-line-store/ensure-range-and-update-ma-for-codes-range! ts-codes from-str to-str)))
@@ -206,7 +199,17 @@
                                       [code res]))
                                   ts-codes)
                  first-err   (first (keep (fn [[_code res]] (when (:error res) res)) results))
-                 sufficient? (cache-covers-range? rows by-code ts-codes start-d to-str)
+                 ;; 每只股票缓存的 [min-date, max-date] 是否覆盖 [start-d, to-str]，用 compare 做字符串日期比较
+                 sufficient? (every? (fn [code]
+                                       (let [code-rows (get by-code code [])
+                                             str-dates (mapv #(str (get % :trade_date)) code-rows)]
+                                         (and (seq str-dates)
+                                              (let [sorted (sort str-dates)
+                                                    min-d  (first sorted)
+                                                    max-d  (last sorted)]
+                                                (and (<= (compare min-d start-d) 0)
+                                                     (>= (compare max-d to-str) 0))))))
+                                     ts-codes)
                  backfill?   (and (seq ts-codes) (not sufficient?))]
              (when backfill?
                (future (k-line-store/ensure-range-and-update-ma-for-codes-range! ts-codes start-d to-str)))
