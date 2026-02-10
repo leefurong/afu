@@ -42,6 +42,11 @@ You are an expert Full-Stack Developer specializing in **Next.js 14 (App Router)
 - **Naming**: Kebab-case for functions and variables (`my-function-name`).
 
 # Project Specifics
+
+## 对话与消息存储（Backend）
+- **消息正文不存 Datomic**：Datomic 只存会话/消息**结构**（id、prev/next、head、`content-resource-id` 等）。消息正文存 **resource-store**（`backend/components/resource-store`），通过 `content-resource-id` 引用。
+- **修改 conversation 或消息持久化时**：必须传入 `resource-store` 参数；删除消息/会话时需同步对 resource-store 做 `delete!`。不要恢复或新增在 Datomic 上存大段 message  body 的字段。
+
 - **API Communication**:
   - Frontend runs on port `3000`.
   - Backend runs on port `4000` (or as configured).
