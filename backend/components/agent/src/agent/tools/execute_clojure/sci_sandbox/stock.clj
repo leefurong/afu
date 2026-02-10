@@ -50,6 +50,24 @@
     (str/starts-with? (str s) "6") (str s ".SH")
     :else (str s ".SZ")))
 
+(defn- rows-cover-range?
+  "code-rows 为某只股票在 get-daily-k-for-multiple-stocks-from-cache-only 返回中的行。
+   若其最早、最晚 trade_date 覆盖 [want-from, want-to]（闭区间）则返回 true，否则 false。"
+  [code-rows want-from want-to]
+  (when (seq code-rows)
+    (let [dates (mapv #(str (:trade_date %)) code-rows)
+          min-d (apply min dates)
+          max-d (apply max dates)]
+      (and (<= (compare min-d (str want-from)) 0)
+           (>= (compare max-d (str want-to)) 0)))))
+
+(defn- cache-covers-range?
+  "rows 为 from-cache-only 返回的序列，by-code 为 (group-by :ts_code rows)。
+   当每只股票的返回数据都覆盖 [want-from, want-to] 时返回 true。"
+  [rows by-code ts-codes want-from want-to]
+  (and (some? rows) (seq ts-codes)
+       (every? #(rows-cover-range? (get by-code % []) want-from want-to) ts-codes)))
+
 (defn request-tushare-api
   "供其他 ns 调用的 Tushare 请求。委托给 tushare ns。"
   [api-name params]
@@ -111,24 +129,6 @@
   "取 row（map，含 :trade_date）的 trade_date 并转为可比较的 YYYYMMDD 字符串。"
   [row]
   (str (get row :trade_date "")))
-
-(defn- rows-cover-range?
-  "code-rows 为某只股票在 get-daily-k-for-multiple-stocks-from-cache-only 返回中的行。
-   若其最早、最晚 trade_date 覆盖 [want-from, want-to]（闭区间）则返回 true，否则 false。"
-  [code-rows want-from want-to]
-  (when (seq code-rows)
-    (let [dates (mapv #(str (:trade_date %)) code-rows)
-          min-d (apply min dates)
-          max-d (apply max dates)]
-      (and (<= (compare min-d (str want-from)) 0)
-           (>= (compare max-d (str want-to)) 0)))))
-
-(defn- cache-covers-range?
-  "rows 为 from-cache-only 返回的序列，by-code 为 (group-by :ts_code rows)。
-   当每只股票的返回数据都覆盖 [want-from, want-to] 时返回 true。"
-  [rows by-code ts-codes want-from want-to]
-  (and (some? rows) (seq ts-codes)
-       (every? #(rows-cover-range? (get by-code % []) want-from want-to) ts-codes)))
 
 (defn- ma-from-payload-by-range
   "根据日 K payload 计算 MA，仅返回 [date-from, date-to] 区间内（含）每个交易日的 items。
