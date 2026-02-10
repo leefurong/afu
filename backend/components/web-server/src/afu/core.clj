@@ -3,10 +3,12 @@
   (:require [afu.handler :as handler]
             [afu.db :as db]
             [afu.nrepl-middleware :as nrepl-mw]
+            [clojure.java.io :as io]
             [conversation :as conversation]
             [agentmanager :as agentmanager]
             [agent.tools.execute-clojure.sci-sandbox.k-line-store :as k-line-store]
             [agent.tools.execute-clojure.sci-sandbox.stock-list-store :as stock-list-store]
+            [resource-store :as res]
             [ring.adapter.jetty :as jetty]))
 
 (def ^:private default-port 4000)
@@ -19,6 +21,8 @@
   "启动 Jetty，默认端口 4000。返回 server 实例，便于 stop。"
   ([] (start-server nil))
   ([opts]
+   (io/make-parents "data/resources.db")
+   (handler/set-resource-store! (res/->sqlite-store "jdbc:sqlite:data/resources.db"))
    (agentmanager/ensure-schema! db/conn)
    (conversation/ensure-schema! db/conn)
    (stock-list-store/ensure-schema! db/conn)

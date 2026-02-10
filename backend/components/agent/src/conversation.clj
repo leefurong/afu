@@ -1,9 +1,10 @@
 (ns conversation
   "会话历史：每条消息为独立 record，通过 prev-id/next-ids 组成链表（支持 fork）。
-   每条 record 带 conversation-id，便于按会话批量删除。
-   与 memory（跨会话记忆）区分：此处仅存单次会话的消息链，用于连续对话上下文。"
-  (:require [datomic.client.api :as d]
-            [clojure.edn :as edn]
+   消息正文存 resource-store，Datomic 只存结构 + :message/content-resource-id。"
+  (:require [clojure.edn :as edn]
+            [clojure.string :as str]
+            [datomic.client.api :as d]
+            [resource-store :as res]
             [sci-context-serde.store.datomic :as sci-store]))
 
 ;; ---------------------------------------------------------------------------
@@ -43,10 +44,10 @@
     :db/valueType   :db.type/uuid
     :db/cardinality :db.cardinality/one
     :db/doc         "当前选中的后继（多后继时有效）；左右切换分支时只改此字段即可"}
-   {:db/ident       :message/data
+   {:db/ident       :message/content-resource-id
     :db/valueType   :db.type/string
     :db/cardinality :db.cardinality/one
-    :db/doc         "消息内容 EDN：{:role \"user\"|\"assistant\"|\"system\" :content \"...\"} 等"}
+    :db/doc         "消息正文在 resource-store 中的 id，按此 id 取内容"}
    {:db/ident       :message/created-at
     :db/valueType   :db.type/instant
     :db/cardinality :db.cardinality/one
@@ -62,18 +63,23 @@
   (d/transact conn {:tx-data (into conversation-schema (into message-schema sci-store/blob-schema))}))
 
 ;; ---------------------------------------------------------------------------
-;; 内部：按 message id 查 entity id / 拉取 entity
+;; 内部：按 message id 拉取 entity；正文从 resource-store 按 content-resource-id 取
 ;; ---------------------------------------------------------------------------
 
-;; Datomic Client API 不支持按 eid pull，用 query 按 message id（lookup ref）取数据
 (defn- pull-message
   [db message-id]
   (when message-id
-    (d/pull db [:message/id :message/conversation-id :message/prev-id :message/next-ids :message/selected-next-id :message/data :message/created-at :message/sci-context-snapshot]
+    (d/pull db [:message/id :message/conversation-id :message/prev-id :message/next-ids :message/selected-next-id :message/content-resource-id :message/created-at :message/sci-context-snapshot]
             [:message/id message-id])))
 
+(defn- resolve-content
+  "从 resource-store 按 content-resource-id 取正文，再 edn 解析为 data map。"
+  [resource-store content-resource-id]
+  (when content-resource-id
+    (when-let [s (res/get* resource-store content-resource-id)]
+      (try (edn/read-string s) (catch Exception _ {})))))
+
 (defn- retract-entity-tx
-  "按 lookup-ref 查出该实体所有 [a v]，生成 retract tx。避免在 query 中传 eid（Client 会变成 invalid [eid]）。"
   [db lookup-ref]
   (let [[attr id] lookup-ref]
     (mapv (fn [[a v]] [:db/retract lookup-ref a v])
@@ -91,14 +97,12 @@
     id))
 
 (defn get-head
-  "返回会话主分支头节点 message id（conversation 上缓存的 head，用于快速加载），无则 nil。"
+  "返回会话主分支头节点 message id（conversation 上缓存的 head），无则 nil。"
   [conn conversation-id]
   (let [e (d/pull (d/db conn) [:conversation/head] [:conversation/id conversation-id])]
     (:conversation/head e)))
 
 (defn compute-head-from
-  "从某条 record（message-id）开始，顺藤摸瓜找 head：有唯一后继则沿其后继走；
-   多后继则走 selected-next-id（未设则取第一个），直到无后继。返回该分支的 head message id。"
   [conn message-id]
   (when message-id
     (let [db (d/db conn)]
@@ -115,8 +119,6 @@
                         (recur sel))))))))))
 
 (defn- find-fork-point-and-siblings
-  "从 message-id 沿 prev-id 回退，找到第一个多后继的节点（fork 点）P。
-   返回 {:fork-id P的id :ordered-next-ids 按 created-at 升序的后继 id 列表 :current-selected P 的 selected-next-id（或第一个后继）}，若无 fork 则 nil。"
   [db message-id]
   (loop [mid message-id]
     (when mid
@@ -133,8 +135,6 @@
               (recur pid))))))))
 
 (defn change-next!
-  "在 message-id 所在分支的 fork 点上，把「当前选中的后继」向左（delta=-1）或向右（delta=+1）切换。
-   后继按 created-at 升序排列，-1=选更早的，+1=选更晚的。返回切换后的被选中的 id；若无左/右则返回 nil。"
   [conn delta message-id]
   (when (and message-id (#{-1 1} delta))
     (let [db (d/db conn)
@@ -149,18 +149,13 @@
               (d/transact conn {:tx-data [{:message/id (:fork-id info) :message/selected-next-id new-selected}]})
               new-selected)))))))
 
-(defn left!
-  "在 message-id 所在分支的 fork 点上向左切换（选时间更早的后继）。返回新选中的 id，若无则 nil。"
-  [conn message-id]
+(defn left! [conn message-id]
   (change-next! conn -1 message-id))
 
-(defn right!
-  "在 message-id 所在分支的 fork 点上向右切换（选时间更晚的后继）。返回新选中的 id，若无则 nil。"
-  [conn message-id]
+(defn right! [conn message-id]
   (change-next! conn 1 message-id))
 
 (defn- can-left-right-for-message
-  "某条消息若有多个后继，按 selected-next-id 在有序后继中的位置：最左则不能左，最右则不能右。"
   [db mid]
   (let [m (pull-message db mid)
         next-ids (vec (or (:message/next-ids m) []))]
@@ -175,19 +170,16 @@
           {:can-left? false :can-right? false})))))
 
 (defn get-messages
-  "从指定头节点沿 prev-id 向前遍历，得到该分支消息列表（ Chronological 顺序）。
-   head-message-id 为 nil 时使用主分支 head；会话不存在或无消息时返回 []。
-   每条为 map，含 :id、:can-left? / :can-right?（该条若有多个后继，当前选中是否可再点左/右），以及 data 中所有键。"
-  ([conn conversation-id]
-   (get-messages conn conversation-id (get-head conn conversation-id)))
-  ([conn conversation-id head-message-id]
-   (if (or (nil? conversation-id) (nil? head-message-id))
+  "从指定头节点沿 prev-id 向前遍历，得到该分支消息列表。需传入 resource-store 以取正文。"
+  ([conn conversation-id resource-store]
+   (get-messages conn conversation-id (get-head conn conversation-id) resource-store))
+  ([conn conversation-id head-message-id resource-store]
+   (if (or (nil? conversation-id) (nil? head-message-id) (nil? resource-store))
      []
      (let [db (d/db conn)
            raw (loop [acc [], mid head-message-id]
                  (if-let [m (pull-message db mid)]
-                   (let [data (try (edn/read-string (or (:message/data m) "{}"))
-                                   (catch Exception _ {}))
+                   (let [data (or (resolve-content resource-store (:message/content-resource-id m)) {})
                          sci (get m :message/sci-context-snapshot)]
                      (recur (conj acc {:id mid :data data :sci-context-snapshot sci}) (:message/prev-id m)))
                    (reverse acc)))]
@@ -197,20 +189,16 @@
              raw)))))
 
 (defn append-messages!
-  "在 prev-message-id 之后追加一串消息，形成一条新链；并可选更新主分支 head。
-   - prev-message-id: 新链挂在其后；为 nil 时表示从会话「当前主分支 head」后追加（无 head 则为首条）。
-   - new-messages: 顺序为 [msg1 msg2 ...]，每条为 map（如 {:role \"user\" :content \"...\"}）。
-   - update-main-head?: 为 true 且 prev 为当前主分支 head 时，把主分支 head 更新为最后一条新消息 id（用于正常续写）；fork 时传 false，不改主分支。"
-  ([conn conversation-id new-messages]
-   (append-messages! conn conversation-id new-messages nil true))
-  ([conn conversation-id new-messages prev-message-id]
-   (append-messages! conn conversation-id new-messages prev-message-id true))
-  ([conn conversation-id new-messages prev-message-id update-main-head?]
-   (when (seq new-messages)
+  "在 prev-message-id 之后追加一串消息；正文写入 resource-store，Datomic 只存 content-resource-id。"
+  ([conn conversation-id new-messages resource-store]
+   (append-messages! conn conversation-id new-messages nil true resource-store))
+  ([conn conversation-id new-messages prev-message-id resource-store]
+   (append-messages! conn conversation-id new-messages prev-message-id true resource-store))
+  ([conn conversation-id new-messages prev-message-id update-main-head? resource-store]
+   (when (and (seq new-messages) resource-store)
      (let [db (d/db conn)
            main-head (get-head conn conversation-id)
            prev-id (or prev-message-id main-head)
-           ;; 首条消息或「挂在主分支头后面」且要求更新时，才改 main head
            update-head? (and update-main-head?
                              (or (nil? prev-id)
                                  (and main-head (= prev-id main-head))))
@@ -219,7 +207,6 @@
            now (java.util.Date.)
            tx (into []
                    (concat
-                    ;; 新消息链：首条 prev = prev-id，其余 prev = 上一条 id；next-ids 链式
                     (map-indexed
                      (fn [i msg]
                        (let [id (nth new-ids i)
@@ -227,22 +214,20 @@
                              next-ids (if (< (inc i) (count new-ids))
                                         [(nth new-ids (inc i))]
                                         [])
-                             m {:message/id id
-                                :message/conversation-id conversation-id
-                                :message/next-ids next-ids
-                                :message/data (pr-str msg)
-                                :message/created-at now}]
-                         (if (some? prev)
-                           (assoc m :message/prev-id prev)
-                           m)))
+                             content-id (res/put! resource-store (pr-str msg))
+                             m (cond-> {:message/id id
+                                        :message/conversation-id conversation-id
+                                        :message/next-ids next-ids
+                                        :message/content-resource-id content-id
+                                        :message/created-at now}
+                                 (some? prev) (assoc :message/prev-id prev))]
+                         m))
                      new-messages)
-                    ;; 前驱的 next-ids 加入首条新消息，并设 selected-next-id 为新分支首条（顺藤摸瓜时走这条）
                     (when prev-id
                       [{:message/id prev-id
                         :message/next-ids (into (vec (remove #{(first new-ids)} prev-next-ids))
                                                 [(first new-ids)])
                         :message/selected-next-id (first new-ids)}])
-                    ;; 主分支 head 更新为最后一条新消息
                     (when update-head?
                       [{:conversation/id conversation-id
                         :conversation/head (last new-ids)}])))]
@@ -250,63 +235,66 @@
        new-ids))))
 
 (defn delete-message!
-  "删除一条消息 record，并维护链表：前驱的 next-ids 去掉本节点并接上本节点的 next-ids；后继的 prev-id 指向前驱。"
-  [conn message-id]
+  "删除一条消息 record 并维护链表；同时从 resource-store 删除对应正文。"
+  [conn message-id resource-store]
   (when message-id
     (let [db (d/db conn)
+          msg (pull-message db message-id)
+          content-id (:message/content-resource-id msg)
           pid (ffirst (d/q '[:find ?prev :in $ ?id :where [?e :message/id ?id] [?e :message/prev-id ?prev]] db message-id))
           nids (mapv first (d/q '[:find ?v :in $ ?id :where [?e :message/id ?id] [?e :message/next-ids ?v]] db message-id))
           cid (ffirst (d/q '[:find ?cid :in $ ?id :where [?e :message/id ?id] [?e :message/conversation-id ?cid]] db message-id))]
       (when (some? cid)
+        (when (and resource-store content-id)
+          (res/delete! resource-store content-id))
         (let [conv (d/pull db [:db/id :conversation/head] [:conversation/id cid])
               head-was-me? (= message-id (:conversation/head conv))
               p-next (when pid (vec (remove #{message-id} (mapv first (d/q '[:find ?v :in $ ?id :where [?e :message/id ?id] [?e :message/next-ids ?v]] db pid)))))
               new-next (when pid (into (or p-next []) (or nids [])))
               tx (into []
                    (concat
-                    ;; 后继的 prev-id 改为前驱（用 lookup ref）
                     (keep (fn [nid]
                             (when (some? nid)
                               {:message/id nid :message/prev-id pid}))
                           (or nids []))
-                    ;; 前驱的 next-ids：去掉 me，接上 nids（用 lookup ref）
                     (when pid
                       [{:message/id pid :message/next-ids new-next}])
-                    ;; 若主分支 head 是当前节点，回退到前驱（或 retract head）
                     (when head-was-me?
                       (if (some? pid)
                         [{:conversation/id cid :conversation/head pid}]
                         [[:db/retract [:conversation/id cid] :conversation/head (:conversation/head conv)]]))
-                    ;; 删除本实体（按 lookup ref 逐属性 retract）
                     (retract-entity-tx db [:message/id message-id])))]
           (d/transact conn {:tx-data tx}))))))
 
 (defn delete-conversation!
-  "按 conversation-id 删除整个会话：删除该会话下所有 message record 及会话实体。"
-  [conn conversation-id]
+  "按 conversation-id 删除整个会话：所有 message 及其 resource-store 正文。"
+  [conn conversation-id resource-store]
   (when conversation-id
     (let [db (d/db conn)
-          msg-ids (mapv second (d/q '[:find ?e ?id :in $ ?cid :where [?e :message/conversation-id ?cid] [?e :message/id ?id]] db conversation-id))
-          msg-retracts (mapcat #(retract-entity-tx db [:message/id %]) msg-ids)
-          conv-retracts (retract-entity-tx db [:conversation/id conversation-id])
-          tx (into (vec msg-retracts) (or conv-retracts []))]
-      (when (seq tx)
-        (d/transact conn {:tx-data tx})))))
+          msg-ids (mapv second (d/q '[:find ?e ?id :in $ ?cid :where [?e :message/conversation-id ?cid] [?e :message/id ?id]] db conversation-id))]
+      (when (seq msg-ids)
+        (when resource-store
+          (doseq [mid msg-ids]
+            (when-let [rid (get (pull-message db mid) :message/content-resource-id)]
+              (res/delete! resource-store rid))))
+        (let [msg-retracts (mapcat #(retract-entity-tx db [:message/id %]) msg-ids)
+              conv-retracts (retract-entity-tx db [:conversation/id conversation-id])
+              tx (into (vec msg-retracts) (or conv-retracts []))]
+          (when (seq tx)
+            (d/transact conn {:tx-data tx})))))))
 
 ;; ---------------------------------------------------------------------------
-;; 列表：近期会话（供侧边栏展示）
+;; 列表：近期会话
 ;; ---------------------------------------------------------------------------
 
 (def ^:private max-title-len 40)
 
 (defn- first-user-content
-  "从 head 沿 prev-id 回溯得到时间正序消息，取第一条 user 的 content，截断。"
-  [db head-id]
+  [db head-id resource-store]
   (when head-id
     (let [chronological (reverse (loop [acc [], mid head-id]
                                   (if-let [m (pull-message db mid)]
-                                    (let [data (try (edn/read-string (or (:message/data m) "{}"))
-                                                    (catch Exception _ {}))]
+                                    (let [data (or (resolve-content resource-store (:message/content-resource-id m)) {})]
                                       (recur (conj acc {:role (get data :role) :content (get data :content "")})
                                              (:message/prev-id m)))
                                     (reverse acc))))]
@@ -317,16 +305,17 @@
             content))))))
 
 (defn list-recent
-  "返回近期会话列表，每项 {:id uuid :title string :updated_at instant}，按 updated_at 降序。
-   title 为第一条 user 消息内容截断，无则「新对话」。"
-  [conn]
-  (let [db (d/db conn)
-        conv-heads (d/q '[:find ?cid ?head :where [?e :conversation/id ?cid] [?e :conversation/head ?head]] db)
-        with-time (for [[cid head] conv-heads
-                        :when cid]
-                    (let [title (or (first-user-content db head) "新对话")
-                          updated-at (when head (get (pull-message db head) :message/created-at))]
-                      {:id cid
-                       :title title
-                       :updated_at (or updated-at (java.util.Date. 0))}))]
-    (reverse (sort-by :updated_at with-time))))
+  "返回近期会话列表，需传入 resource-store 以生成 title。"
+  [conn resource-store]
+  (if (nil? resource-store)
+    []
+    (let [db (d/db conn)
+          conv-heads (d/q '[:find ?cid ?head :where [?e :conversation/id ?cid] [?e :conversation/head ?head]] db)
+          with-time (for [[cid head] conv-heads
+                          :when cid]
+                      (let [title (or (first-user-content db head resource-store) "新对话")
+                            updated-at (when head (get (pull-message db head) :message/created-at))]
+                        {:id cid
+                         :title title
+                         :updated_at (or updated-at (java.util.Date. 0))}))]
+      (reverse (sort-by :updated_at with-time)))))

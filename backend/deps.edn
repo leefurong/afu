@@ -1,6 +1,7 @@
 {:deps {afu/agent {:local/root "components/agent"}
         afu/web-server {:local/root "components/web-server"}
-        afu/account {:local/root "components/account"}}
+        afu/account {:local/root "components/account"}
+        afu/resource-store {:local/root "components/resource-store"}}
 
  :aliases {:dev {:extra-paths ["development/src"]
                  ;; 开发工具

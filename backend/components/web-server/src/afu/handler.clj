@@ -11,12 +11,18 @@
             [afu.account.core :as account]
             [afu.db :as db]
             [conversation :as conversation]
+            [resource-store]
             [sci-context-serde.core :as serde]
             [sci-context-serde.store :as store]
             [sci-context-serde.store.datomic :as store.datomic]))
 
 ;; 目前聊天统一用这个固定 agent id（后续可改为按用户/会话）
 (def ^:private fixed-agent-id #uuid "00000000-0000-0000-0000-000000000001")
+
+;; Resource store 由 afu.core 启动时注入，供 conversation 存/取消息正文
+(def ^:private resource-store (atom nil))
+(defn set-resource-store! [store] (reset! resource-store store))
+(defn- get-resource-store [] @resource-store)
 
 ;; ---------------------------------------------------------------------------
 ;; 登录逻辑：调用 account 组件做真实校验
@@ -132,7 +138,7 @@
                             new-msgs (into [{:role "user" :content user-text}]
                                            (cond-> (or api-shaped [])
                                              (seq final-content) (conj {:role "assistant" :content final-content})))
-                            new-ids (conversation/append-messages! conn conversation-id new-msgs branch-head update-main-head?)]
+                            new-ids (conversation/append-messages! conn conversation-id new-msgs branch-head update-main-head? (get-resource-store))]
                         (when (and (seq steps) (seq new-ids))
                           (let [ctx (exec-ctx/get-or-create-ctx conversation-id)]
                             (doseq [i (range (/ (count steps) 2))]
@@ -206,7 +212,7 @@
         ;; 当前分支头：客户端传 prev_message_id 表示在该条之后续写（含 fork），否则用主分支 head
         branch-head (or prev-msg-id (conversation/get-head conn conv-id))
         _          (println "[chat] conv-id:" conv-id "branch-head:" branch-head "fork?" (boolean prev-msg-id))
-        history    (conversation/get-messages conn conv-id branch-head)
+        history    (conversation/get-messages conn conv-id branch-head (get-resource-store))
         ;; 若历史中有 execute_clojure 的 tool 结果（带 sci-context-snapshot），恢复该条对应的 ctx 供本轮使用
         _          (let [with-snapshot (filter :sci-context-snapshot history)
                          last-snapshot-msg (last with-snapshot)]
@@ -268,7 +274,7 @@
   [_request]
   (try
     (let [conn  db/conn
-          items (conversation/list-recent conn)
+          items (conversation/list-recent conn (get-resource-store))
           ;; 仅字符串 key + 字符串/nil 值，保证 cheshire 序列化不抛错
           body  (mapv (fn [m]
                        {"id"         (str (:id m))
@@ -291,7 +297,7 @@
                   (try (java.util.UUID/fromString id-str) (catch Exception _ nil)))]
     (if-not conv-id
       {:status 400 :body {:error "Invalid conversation id"}}
-      (let [msgs (conversation/get-messages conn conv-id)]
+      (let [msgs (conversation/get-messages conn conv-id (get-resource-store))]
         {:status 200
          :body   (if raw?
                    ;; 调试：完整数据，含 role=tool_call/tool_result

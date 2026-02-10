@@ -12,6 +12,7 @@
         clj-http/clj-http        {:mvn/version "3.13.0"}
         cheshire/cheshire        {:mvn/version "5.13.0"}
         ;; 本地模块
-        afu/agent    {:local/root "../agent"}
-        afu/account  {:local/root "../account"}
-        afu/database {:local/root "../database"}}}
+        afu/agent         {:local/root "../agent"}
+        afu/account       {:local/root "../account"}
+        afu/database      {:local/root "../database"}
+        afu/resource-store {:local/root "../resource-store"}}}
