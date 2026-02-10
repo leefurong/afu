@@ -249,7 +249,8 @@
                               ts-codes)]
             {:ok {:by_ts_code (into {} by-code)}}))))))
 
-(def ^:private max-per-page 50)
+(def ^:private max-per-page-full 50)
+(def ^:private max-per-page-codes-only 500)
 
 (defn- total-pages
   [total-items per-page]
@@ -265,23 +266,28 @@
 
 (defn cross-signals-on-date
   "某交易日、在给定股票代码中，从 DB 统计金叉/死叉信号（仅读缓存，无数据则不计）。
-   支持分页：不传分页参数时默认返回第一页，每页最多 50 条。
-   调用方式：
-     (stock/cross-signals-on-date stock-codes trade-date)           ; 默认第 1 页，每页 50 条
-     (stock/cross-signals-on-date stock-codes trade-date {:page 2}) ; 第 2 页
-     (stock/cross-signals-on-date stock-codes trade-date {:page 1 :per-page 30}) ; 第 1 页，每页 30 条
-   opts 可选键：:page（当前页，从 1 开始，默认 1）、:per-page（每页条数，默认 50，最大 50）。
-   返回 {:summary _ :pagination _ :golden_cross _ :death_cross _}，其中 :pagination 含
+   支持分页：不传分页参数时默认返回第一页。
+   opts 可选键：
+     :page 当前页（从 1 开始，默认 1）
+     :per-page 每页条数。带 MA 详情时默认 50、最大 50；仅股票代码时默认 500、最大 500。
+     :codes-only 为 true 时只返回每条 {:ts_code _}，不包含 :ma，每页最多 500 条；需详情时可再调本接口或 golden-cross 等按代码查。
+   调用示例：
+     (stock/cross-signals-on-date codes date)                      ; 第 1 页，带 MA，每页 50
+     (stock/cross-signals-on-date codes date {:codes-only true})    ; 仅代码，每页 500
+     (stock/cross-signals-on-date codes date {:page 2 :per-page 30})
+   返回 {:summary _ :pagination _ :golden_cross _ :death_cross _}，:pagination 含
    :total_pages :per_page :current_page :total_golden_cross :total_death_cross。"
   ([stock-codes trade-date]
    (cross-signals-on-date stock-codes trade-date nil))
   ([stock-codes trade-date opts]
-   (let [default-opts {:page 1 :per-page max-per-page}
-         opts         (merge default-opts opts)
+   (let [opts         (merge {:page 1 :codes-only false} opts)
+         codes-only?  (boolean (:codes-only opts))
+         max-per-page (if codes-only? max-per-page-codes-only max-per-page-full)
+         default-per  (if codes-only? max-per-page-codes-only max-per-page-full)
+         per-page     (min max-per-page (max 1 (int (or (:per-page opts) default-per))))
          trade-date   (str trade-date)
          ts-codes     (vec (distinct (map #(normalize-ts-code (str %)) (filter (complement str/blank?) (seq stock-codes)))))
-         page         (max 1 (int (:page opts)))
-         per-page     (min max-per-page (max 1 (int (:per-page opts))))]
+         page         (max 1 (int (:page opts)))]
      (if (empty? ts-codes)
        {:summary     {:stock_count 0 :data_count 0 :golden_cross_count 0 :death_cross_count 0}
         :pagination  {:total_pages 0 :per_page per-page :current_page 1 :total_golden_cross 0 :total_death_cross 0}
@@ -289,10 +295,13 @@
        (let [data-count   (or (k-line-store/get-row-count-by-date-and-codes trade-date ts-codes) 0)
              golden       (or (k-line-store/get-rows-by-date-and-codes-with-cross-type trade-date ts-codes "金叉") [])
              death        (or (k-line-store/get-rows-by-date-and-codes-with-cross-type trade-date ts-codes "死叉") [])
-             ma-keys      [:ma5 :ma10 :ma20 :ma30 :ma60]
-             row->ma      (fn [r] (select-keys (:payload r) ma-keys))
-             golden-list  (mapv (fn [r] {:ts_code (:ts_code r) :ma (row->ma r)}) golden)
-             death-list   (mapv (fn [r] {:ts_code (:ts_code r) :ma (row->ma r)}) death)
+             row->item    (if codes-only?
+                            (fn [r] {:ts_code (:ts_code r)})
+                            (let [ma-keys [:ma5 :ma10 :ma20 :ma30 :ma60]
+                                  row->ma (fn [r] (select-keys (:payload r) ma-keys))]
+                              (fn [r] {:ts_code (:ts_code r) :ma (row->ma r)})))
+             golden-list  (mapv row->item golden)
+             death-list   (mapv row->item death)
              g-total      (count golden-list)
              d-total      (count death-list)
              total-pages-g (total-pages g-total per-page)
