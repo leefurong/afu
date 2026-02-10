@@ -29,6 +29,12 @@ export type ChatRequestBody = {
   conversation_id?: string;
 };
 
+function isNetworkError(e: unknown): boolean {
+  if (e instanceof TypeError && e.message === "Failed to fetch") return true;
+  if (e instanceof Error && /fetch|network|connection/i.test(e.message)) return true;
+  return false;
+}
+
 export async function streamChat(
   apiUrl: string,
   body: ChatRequestBody,
@@ -37,11 +43,20 @@ export async function streamChat(
   const { onThinking, onContent, onToolCall, onToolResult, onDone, onError } =
     callbacks;
 
-  const res = await fetch(apiUrl, {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(body),
-  });
+  let res: Response;
+  try {
+    res = await fetch(apiUrl, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+  } catch (e) {
+    const err = isNetworkError(e)
+      ? new Error("无法连接服务器，请确认后端已启动（默认端口 4000）")
+      : (e instanceof Error ? e : new Error(String(e)));
+    onError?.(err);
+    return;
+  }
 
   if (!res.ok) {
     const err = new Error(res.statusText || "Request failed");

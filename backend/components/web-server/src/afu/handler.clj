@@ -58,15 +58,31 @@
             (apply str (keep #(when (= "text" (get % :type)) (get % :text)) parts))
             :else nil)))))
 
+(def ^:private max-cross-signals-entries
+  "金叉/死叉等列表在 NDJSON 中最多保留条数，避免单条 tool_result 过大导致 OOM/进程退出。"
+  50)
+
+(defn- truncate-tool-result
+  "对已知的大结果（如 cross-signals 的 golden_cross/death_cross）做条数截断，避免 NDJSON 单行过大。"
+  [v]
+  (if (and (map? v) (or (contains? v :golden_cross) (contains? v :death_cross)))
+    (-> v
+        (update :golden_cross (fn [xs] (if (sequential? xs) (take max-cross-signals-entries (vec xs)) xs)))
+        (update :death_cross  (fn [xs] (if (sequential? xs) (take max-cross-signals-entries (vec xs)) xs)))
+        (assoc :truncated true
+               :truncated_message (str "结果条数过多已截断，仅保留前 " max-cross-signals-entries " 条；请缩小股票范围或按日期分页。")))
+    v))
+
 (defn- event->ndjson-line
-  "把 agent 事件变成 NDJSON 一行。类型与 thinking/content/done 区分：tool_call、tool_result。"
+  "把 agent 事件变成 NDJSON 一行。类型与 thinking/content/done 区分：tool_call、tool_result。
+   tool_result 过大会先截断再序列化，避免 OOM/服务器异常退出。"
   [[k v] conversation-id]
   (json/generate-string
    (case k
      :thinking   {:type "thinking" :text v}
      :content    {:type "content" :text v}
      :tool-call  {:type "tool_call" :name (:name v) :code (:code v)}
-     :tool-result {:type "tool_result" :result v}
+     :tool-result {:type "tool_result" :result (truncate-tool-result v)}
      :done       (cond-> {:type "done"}
                    conversation-id (assoc :conversation_id (str conversation-id)))
      ;; 未知类型仍输出，便于调试
@@ -136,8 +152,12 @@
                     (catch Throwable t
                       (println "[chat] :done persist failed (e.g. Item too large):" (.getMessage t)))))
           nil)
-        (.write out (.getBytes (str (event->ndjson-line ev conversation-id) "\n") "UTF-8"))
-        (.flush out)
+        (try
+          (let [line (str (event->ndjson-line ev conversation-id) "\n")]
+            (.write out (.getBytes line "UTF-8"))
+            (.flush out))
+          (catch Throwable t
+            (println "[chat] stream write failed (event=" (first ev) "):" (.getMessage t))))
         (recur)))))
 
 (defn- history->api-messages
