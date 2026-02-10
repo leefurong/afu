@@ -82,7 +82,8 @@
 
 (defn- event->ndjson-line
   "把 agent 事件变成 NDJSON 一行。类型与 thinking/content/done 区分：tool_call、tool_result。
-   tool_result 过大会先截断再序列化，避免 OOM/服务器异常退出。"
+   tool_result 过大会先截断再序列化，避免 OOM/服务器异常退出。
+   当前分支由后端 root + selected-next-id 推出，前端统一 GET messages 即可，不再传 branch_head。"
   [[k v] conversation-id]
   (json/generate-string
    (case k
@@ -162,13 +163,13 @@
                       (agentmanager/save-agent! conn v))
                     (catch Throwable t
                       (println "[chat] :done persist failed (e.g. Item too large):" (.getMessage t)))))
+          (try
+            (let [line (str (event->ndjson-line ev conversation-id) "\n")]
+              (.write out (.getBytes line "UTF-8"))
+              (.flush out))
+            (catch Throwable t
+              (println "[chat] stream write failed (event=" (first ev) "):" (.getMessage t))))
           nil)
-        (try
-          (let [line (str (event->ndjson-line ev conversation-id) "\n")]
-            (.write out (.getBytes line "UTF-8"))
-            (.flush out))
-          (catch Throwable t
-            (println "[chat] stream write failed (event=" (first ev) "):" (.getMessage t))))
         (recur)))))
 
 (defn- history->api-messages
@@ -216,13 +217,13 @@
         body       (get request :body {})
         user-text  (last-user-text body)
         _          (println "[chat] request body keys:" (keys body) "user-text len:" (count (str user-text)) "conv-id from body?" (boolean (resolve-conversation-id body)))
-        conv-id    (or (resolve-conversation-id body) (conversation/create! conn))
+        conv-id    (or (resolve-conversation-id body) (conversation/create! conn (get-resource-store)))
         prev-msg-id (resolve-prev-message-id body)
         branch-from-root? (resolve-branch-from-root body)
-        ;; 当前分支头：branch_from_root 时从根分叉（无历史）；否则 prev_message_id 或主分支 head
+        ;; 当前分支：branch_from_root 时从根分叉；否则 prev_message_id；否则由 root + selected-next-id 推出
         branch-head (cond branch-from-root? nil
                           prev-msg-id prev-msg-id
-                          :else (conversation/get-head conn conv-id))
+                          :else (conversation/get-current-head conn conv-id))
         _          (println "[chat] conv-id:" conv-id "branch-head:" branch-head "fork?" (boolean prev-msg-id) "branch-from-root?" branch-from-root?)
         history    (conversation/get-messages conn conv-id branch-head (get-resource-store))
         ;; 若历史中有 execute_clojure 的 tool 结果（带 sci-context-snapshot），恢复该条对应的 ctx 供本轮使用
@@ -301,8 +302,8 @@
       {:status 500 :body {"error" (str (.getMessage t))}})))
 
 (defn get-conversation-messages-handler
-  "GET /api/conversations/:id/messages：返回该会话主分支消息列表，供前端恢复展示。
-   Query ?raw=1 时返回完整 message 数据（含 tool_call/tool_result），便于调试。"
+  "GET /api/conversations/:id/messages：返回该会话当前分支消息列表。
+   当前分支由 root + 各 message 的 selected-next-id 推出，统一经 get-current-head。"
   [request]
   (let [conn    db/conn
         id-str  (get-in request [:path-params :id])
@@ -311,20 +312,63 @@
                   (try (java.util.UUID/fromString id-str) (catch Exception _ nil)))]
     (if-not conv-id
       {:status 400 :body {:error "Invalid conversation id"}}
-      (let [msgs (conversation/get-messages conn conv-id (get-resource-store))]
+      (let [head (conversation/get-current-head conn conv-id)
+            msgs (conversation/get-messages conn conv-id head (get-resource-store))]
         {:status 200
          :body   (if raw?
-                   ;; 调试：完整数据，含 role=tool_call/tool_result
                    (mapv (fn [m] (update m :id str)) msgs)
                    (mapv (fn [m]
                            (cond-> {:id      (str (:id m))
                                     :role    (get m :role "")
-                                    :content (get m :content "")}
+                                    :content (get m :content "")
+                                    :can_left (boolean (get m :can-left?))
+                                    :can_right (boolean (get m :can-right?))
+                                    :sibling_index (get m :sibling-index 1)
+                                    :sibling_total (get m :sibling-total 1)}
                              (= (get m :role "") "tool")
                              (assoc :tool_call_id (get m :tool_call_id ""))
                              (and (= (get m :role "") "assistant") (seq (get m :tool_calls)))
                              (assoc :tool_calls (get m :tool_calls))))
                          msgs))}))))
+
+(defn- switch-branch-handler
+  "POST /api/conversations/:id/messages/:message_id/switch-left 或 switch-right。
+   找到该 message 的父，把父的 selected-next-id 换成左/右兄弟；然后返回当前分支最新消息列表。"
+  [request delta]
+  (let [conn       db/conn
+        id-str     (get-in request [:path-params :id])
+        msg-id-str (get-in request [:path-params :message_id])
+        raw?       (get-in request [:query-params "raw"])
+        conv-id    (when id-str (try (java.util.UUID/fromString id-str) (catch Exception _ nil)))
+        message-id (when msg-id-str (try (java.util.UUID/fromString msg-id-str) (catch Exception _ nil)))]
+    (if (or (nil? conv-id) (nil? message-id))
+      {:status 400 :body {"error" "Invalid conversation id or message id"}}
+      (if (conversation/change-next! conn delta message-id)
+        (let [tip (conversation/get-current-head conn conv-id)
+              msgs (conversation/get-messages conn conv-id tip (get-resource-store))]
+          {:status 200
+           :body   (if raw?
+                     (mapv (fn [m] (update m :id str)) msgs)
+                     (mapv (fn [m]
+                             (cond-> {:id      (str (:id m))
+                                      :role    (get m :role "")
+                                      :content (get m :content "")
+                                      :can_left (boolean (get m :can-left?))
+                                      :can_right (boolean (get m :can-right?))
+                                      :sibling_index (get m :sibling-index 1)
+                                      :sibling_total (get m :sibling-total 1)}
+                               (= (get m :role "") "tool")
+                               (assoc :tool_call_id (get m :tool_call_id ""))
+                               (and (= (get m :role "") "assistant") (seq (get m :tool_calls)))
+                               (assoc :tool_calls (get m :tool_calls))))
+                           msgs))})
+        {:status 400 :body {"error" "No sibling in that direction"}}))))
+
+(defn switch-left-handler [request]
+  (switch-branch-handler request -1))
+
+(defn switch-right-handler [request]
+  (switch-branch-handler request 1))
 
 ;; ---------------------------------------------------------------------------
 ;; 路由与 Ring Handler
@@ -335,9 +379,10 @@
    [["/api"
      ["/login" {:post login-handler}]
      ["/chat"  {:post chat-handler}]
-     ;; 扁平写死每条 path，避免嵌套导致 GET /api/conversations 不匹配
      ["/conversations" {:get list-conversations-handler}]
-     ["/conversations/:id/messages" {:get get-conversation-messages-handler}]]]))
+     ["/conversations/:id/messages" {:get get-conversation-messages-handler}]
+     ["/conversations/:id/messages/:message_id/switch-left" {:post switch-left-handler}]
+     ["/conversations/:id/messages/:message_id/switch-right" {:post switch-right-handler}]]]))
 
 (defn ring-handler
   "无中间件的纯 Ring handler。无匹配路由时返回 404，避免返回 nil 导致 Response map is nil。"

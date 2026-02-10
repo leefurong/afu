@@ -19,6 +19,7 @@ import {
   Loader2,
   ChevronRight,
   ChevronDown,
+  ChevronLeft,
   PanelLeft,
   MoreHorizontal,
   X,
@@ -28,6 +29,8 @@ import { streamChat } from "@/services/chat";
 import {
   listConversations,
   getConversationMessages,
+  switchConversationBranchLeft,
+  switchConversationBranchRight,
   type ConversationItem,
   type ConversationMessage,
 } from "@/services/conversation";
@@ -50,6 +53,10 @@ type Message = {
   role: "user" | "assistant";
   parts: MessagePart[];
   steps?: StreamStep[];
+  can_left?: boolean;
+  can_right?: boolean;
+  sibling_index?: number;
+  sibling_total?: number;
 };
 
 function getMessageText(message: Message): string {
@@ -70,6 +77,10 @@ function apiMessagesToMessages(list: ConversationMessage[]): Message[] {
         id: m.id,
         role: "user",
         parts: [{ type: "text", text: m.content ?? "" }],
+        can_left: m.can_left,
+        can_right: m.can_right,
+        sibling_index: m.sibling_index,
+        sibling_total: m.sibling_total,
       });
       i++;
       continue;
@@ -112,6 +123,10 @@ function apiMessagesToMessages(list: ConversationMessage[]): Message[] {
         role: "assistant",
         parts: [{ type: "text", text: m.content ?? "" }],
         steps: steps.length > 0 ? steps : undefined,
+        can_left: m.can_left,
+        can_right: m.can_right,
+        sibling_index: m.sibling_index,
+        sibling_total: m.sibling_total,
       });
       i += 1 + toolCalls.length;
       continue;
@@ -121,6 +136,10 @@ function apiMessagesToMessages(list: ConversationMessage[]): Message[] {
         id: m.id,
         role: "assistant",
         parts: [{ type: "text", text: m.content ?? "" }],
+        can_left: m.can_left,
+        can_right: m.can_right,
+        sibling_index: m.sibling_index,
+        sibling_total: m.sibling_total,
       });
       i++;
       continue;
@@ -397,6 +416,18 @@ export default function ChatPage() {
 
   const clearError = useCallback(() => setError(null), []);
 
+  const handleSwitchBranch = useCallback(
+    (direction: "left" | "right", childMessageId: string) => {
+      if (!conversationId) return;
+      const fn =
+        direction === "left" ? switchConversationBranchLeft : switchConversationBranchRight;
+      fn(conversationId, childMessageId)
+        .then((list) => setMessages(apiMessagesToMessages(list)))
+        .catch((err) => setError(err instanceof Error ? err : new Error(String(err))));
+    },
+    [conversationId]
+  );
+
   const streamingRef = useRef("");
   const streamStepsRef = useRef<StreamStep[]>([]);
 
@@ -479,22 +510,29 @@ export default function ChatPage() {
         onDone: (opts) => {
           const finalContent = streamingRef.current;
           const steps = streamStepsRef.current;
+          const cid = opts?.conversation_id ?? conversationId;
           if (opts?.conversation_id) setConversationId(opts.conversation_id);
           setTargetParentId(null);
           setBranchFromRoot(false);
-          setMessages((prev) => [
-            ...prev,
-            {
-              id: newId(),
-              role: "assistant",
-              parts: [{ type: "text", text: finalContent }],
-              steps: steps.length > 0 ? steps : undefined,
-            },
-          ]);
           setStreamingContent("");
           setStreamSteps([]);
           streamStepsRef.current = [];
           setStatus("idle");
+          if (cid) {
+            getConversationMessages(cid)
+              .then(apiMessagesToMessages)
+              .then(setMessages);
+          } else {
+            setMessages((prev) => [
+              ...prev,
+              {
+                id: newId(),
+                role: "assistant",
+                parts: [{ type: "text", text: finalContent }],
+                steps: steps.length > 0 ? steps : undefined,
+              },
+            ]);
+          }
         },
         onError: (err) => {
           setError(err);
@@ -652,6 +690,35 @@ export default function ChatPage() {
                       >
                         {message.role === "user" ? (
                           <div className="group flex w-full min-w-0 max-w-[85%] flex-col items-end gap-1">
+                            {(message.can_left || message.can_right) && (
+                                <div className="flex items-center gap-0.5 rounded-md border border-border/60 bg-card/80 px-1 py-0.5 text-muted-foreground">
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-6 w-6"
+                                    disabled={!message.can_left}
+                                    onClick={() => handleSwitchBranch("left", message.id)}
+                                    aria-label="上一分支"
+                                  >
+                                    <ChevronLeft className="size-3.5" />
+                                  </Button>
+                                  <span className="min-w-[2rem] text-center text-xs">
+                                    {message.sibling_index ?? 1}/{message.sibling_total ?? 1}
+                                  </span>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-6 w-6"
+                                    disabled={!message.can_right}
+                                    onClick={() => handleSwitchBranch("right", message.id)}
+                                    aria-label="下一分支"
+                                  >
+                                    <ChevronRight className="size-3.5" />
+                                  </Button>
+                                </div>
+                              )}
                             <div
                               className={cn(
                                 "w-full min-w-0 overflow-auto rounded-lg px-3 py-2 text-sm",
@@ -677,7 +744,36 @@ export default function ChatPage() {
                             />
                           </div>
                         ) : (
-                          <div className="flex w-full min-w-0 justify-start">
+                          <div className="flex w-full min-w-0 flex-col items-start gap-1">
+                            {(message.can_left || message.can_right) && (
+                                <div className="flex items-center gap-0.5 rounded-md border border-border/60 bg-card/80 px-1 py-0.5 text-muted-foreground">
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-6 w-6"
+                                    disabled={!message.can_left}
+                                    onClick={() => handleSwitchBranch("left", message.id)}
+                                    aria-label="上一分支"
+                                  >
+                                    <ChevronLeft className="size-3.5" />
+                                  </Button>
+                                  <span className="min-w-[2rem] text-center text-xs">
+                                    {message.sibling_index ?? 1}/{message.sibling_total ?? 1}
+                                  </span>
+                                  <Button
+                                    type="button"
+                                    variant="ghost"
+                                    size="icon"
+                                    className="h-6 w-6"
+                                    disabled={!message.can_right}
+                                    onClick={() => handleSwitchBranch("right", message.id)}
+                                    aria-label="下一分支"
+                                  >
+                                    <ChevronRight className="size-3.5" />
+                                  </Button>
+                                </div>
+                              )}
                             <div
                               className={cn(
                                 "w-full min-w-0 max-w-[85%] overflow-auto rounded-lg px-3 py-2 text-sm",

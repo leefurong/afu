@@ -10,7 +10,7 @@ export type ChatStreamCallbacks = {
   onContent?: (chunk: string) => void;
   onToolCall?: (data: ToolCallPayload) => void;
   onToolResult?: (data: ToolResultPayload) => void;
-  /** 收到 done 时调用，若后端返回了 conversation_id 会传入，用于后续请求延续会话 */
+  /** 收到 done 时调用；conversation_id 由后端返回，前端可再 GET messages 拉当前分支。 */
   onDone?: (opts?: { conversation_id?: string }) => void;
   onError?: (err: Error) => void;
 };
@@ -27,7 +27,7 @@ type NDJSONEvent = {
 export type ChatRequestBody = {
   text: string;
   conversation_id?: string;
-  /** 在此消息之后追加（fork）；不传则接在主分支 head 后 */
+  /** 在此消息之后追加（fork）；不传则接在当前分支 tip 后（由 root + selected-next-id 推出） */
   prev_message_id?: string;
   /** 编辑第一条消息时从根分叉，新消息不接在任何已有消息后 */
   branch_from_root?: boolean;
@@ -110,7 +110,7 @@ export async function streamChat(
             case "tool_result":
               if (event.result !== undefined) onToolResult?.(event.result);
               break;
-            case "done":
+              case "done":
               callOnDone(
                 event.conversation_id
                   ? { conversation_id: event.conversation_id }

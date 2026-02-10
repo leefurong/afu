@@ -16,6 +16,10 @@ export type ConversationMessage = {
   content: string;
   tool_calls?: { id: string; type: string; function: { name: string; arguments: string } }[];
   tool_call_id?: string;
+  can_left?: boolean;
+  can_right?: boolean;
+  sibling_index?: number;
+  sibling_total?: number;
 };
 
 export async function listConversations(): Promise<ConversationItem[]> {
@@ -27,5 +31,23 @@ export async function getConversationMessages(
 ): Promise<ConversationMessage[]> {
   return fetchClient.get<ConversationMessage[]>(
     `/api/conversations/${conversationId}/messages`
+  );
+}
+
+export async function switchConversationBranchLeft(
+  conversationId: string,
+  messageId: string
+): Promise<ConversationMessage[]> {
+  return fetchClient.post<ConversationMessage[]>(
+    `/api/conversations/${conversationId}/messages/${messageId}/switch-left`
+  );
+}
+
+export async function switchConversationBranchRight(
+  conversationId: string,
+  messageId: string
+): Promise<ConversationMessage[]> {
+  return fetchClient.post<ConversationMessage[]>(
+    `/api/conversations/${conversationId}/messages/${messageId}/switch-right`
   );
 }
