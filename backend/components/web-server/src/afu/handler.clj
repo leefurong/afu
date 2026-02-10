@@ -58,26 +58,20 @@
             (apply str (keep #(when (= "text" (get % :type)) (get % :text)) parts))
             :else nil)))))
 
-(def ^:private max-cross-signals-entries 50)
-(def ^:private max-cross-signals-entries-codes-only 500)
+(def ^:private max-cross-signals-entries 500)
 
 (defn- truncate-tool-result
-  "对已知的大结果（如 cross-signals 的 golden_cross/death_cross）做条数截断，避免 NDJSON 单行过大。
-   仅含 :ts_code 时每列表最多 500 条，含 :ma 时最多 50 条。"
+  "对已知的大结果（如 cross-signals 的 golden_cross/death_cross）做条数截断，避免 NDJSON 单行过大。"
   [v]
   (if (and (map? v) (or (contains? v :golden_cross) (contains? v :death_cross)))
-    (let [sample   (or (first (:golden_cross v)) (first (:death_cross v)))
-          limit    (if (and (map? sample) (contains? sample :ma))
-                     max-cross-signals-entries
-                     max-cross-signals-entries-codes-only)
-          take-n   (fn [xs] (if (sequential? xs) (take limit (vec xs)) xs))
-          new-g    (take-n (:golden_cross v))
-          new-d    (take-n (:death_cross v))
+    (let [take-n    (fn [xs] (if (sequential? xs) (take max-cross-signals-entries (vec xs)) xs))
+          new-g     (take-n (:golden_cross v))
+          new-d     (take-n (:death_cross v))
           truncated? (or (> (count (vec (:golden_cross v))) (count new-g))
                         (> (count (vec (:death_cross v))) (count new-d)))]
       (cond-> (assoc v :golden_cross new-g :death_cross new-d)
         truncated? (assoc :truncated true
-                         :truncated_message (str "结果条数过多已截断，仅保留前 " limit " 条；请缩小股票范围或按日期分页。"))))
+                         :truncated_message (str "结果条数过多已截断，仅保留前 " max-cross-signals-entries " 条；请按日期分页。"))))
     v))
 
 (defn- event->ndjson-line

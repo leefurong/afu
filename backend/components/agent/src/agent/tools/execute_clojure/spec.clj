@@ -24,7 +24,7 @@
                        "   - 多股票日 K (stock/get-daily-k-for-multiple-stocks stock-codes date-from date-to)。获取 [date-from, date-to] 区间内多只股票的日 K 线。返回 {:ok {:fields _ :by_ts_code {\"000001.SZ\" [{:trade_date _ :close _ :open _ :high _ :low _ ...} ...]} ...}} 或 {:error _}；未初始化时 :error \"K 线缓存未初始化\"。\n"
                        "   - 多股票 MA (stock/ma-for-multiple-stocks stock-codes period date-from date-to)。计算 [date-from, date-to] 区间内每个交易日的 period 日 MA。3 参数时 (stock-codes period date) 表示单日。返回 {:ok {:by_ts_code {\"000001.SZ\" {:items [...]} ...}}}。\n"
                        "   - 多股票金叉 (stock/golden-cross-for-multiple-stocks stock-codes short-period long-period date-from date-to)。区间内金叉；无交易日则该股票 crosses 为 []。返回 {:ok {:by_ts_code {\"000001.SZ\" {:crosses [...]} ...}}}。\n"
-                       "   - 某日金叉/死叉统计 (stock/cross-signals-on-date stock-codes trade-date opts)。仅读 DB 缓存。opts：:page、:per-page、:codes-only。默认带 MA 详情，每页最多 50 条；:codes-only true 时仅返回 {:ts_code _}，每页最多 500 条，适合先拉代码再按需查详情（如 golden-cross 等）。返回 {:summary _ :pagination _ :golden_cross _ :death_cross _}。\n"
+                       "   - 某日金叉/死叉统计 (stock/cross-signals-on-date stock-codes trade-date opts)。仅读 DB 缓存，只返回股票代码 {:ts_code _}，分页每页最多 500 条；opts :page :per-page。返回 {:summary _ :pagination _ :golden_cross _ :death_cross _}。\n"
                        "6) 如需其他外部数据，可用 http + json + env：例如 Tushare 可 POST http://api.tushare.pro，body 为 JSON（api_name、token、params），返回用 json/parse-string 解析。\n"
                        "7) pprint：(pprint/pprint x) 格式化打印，便于查看复杂结构。\n\n"
                        "禁止：require/import、Java 互操作、eval/load-file/slurp/spit/read-string 等。\n\n"
