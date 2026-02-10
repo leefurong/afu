@@ -23,6 +23,7 @@ import {
   MoreHorizontal,
   X,
 } from "lucide-react";
+import { MessageToolBar } from "@/components/message-tool-bar";
 import { streamChat } from "@/services/chat";
 import {
   listConversations,
@@ -331,6 +332,10 @@ export default function ChatPage() {
   const [loadingMessages, setLoadingMessages] = useState(false);
   const scrollRef = useRef<HTMLDivElement>(null);
   const [headerStuck, setHeaderStuck] = useState(false);
+  /** 编辑/重发时：新消息将接在此 id 对应消息之后（fork）。有值时输入框为「编辑后发送」态。 */
+  const [targetParentId, setTargetParentId] = useState<string | null>(null);
+  /** 编辑第一条消息时为 true，发送时走「从根分叉」逻辑。 */
+  const [branchFromRoot, setBranchFromRoot] = useState(false);
 
   const isLoading = status === "streaming";
 
@@ -366,6 +371,8 @@ export default function ChatPage() {
 
   const loadConversation = useCallback(async (id: string) => {
     setLoadingMessages(true);
+    setTargetParentId(null);
+    setBranchFromRoot(false);
     try {
       const list = await getConversationMessages(id);
       const msgs = apiMessagesToMessages(list);
@@ -383,6 +390,8 @@ export default function ChatPage() {
     setStreamingContent("");
     setStreamSteps([]);
     setError(null);
+    setTargetParentId(null);
+    setBranchFromRoot(false);
     setDrawerOpen(false);
   }, []);
 
@@ -397,13 +406,23 @@ export default function ChatPage() {
       const text = input.trim();
       if (!text || isLoading) return;
 
+      const parentId = targetParentId;
+      const fromRoot = branchFromRoot;
       const userMessage: Message = {
         id: newId(),
         role: "user",
         parts: [{ type: "text", text }],
       };
-      setMessages((prev) => [...prev, userMessage]);
+      setMessages((prev) => {
+        if (fromRoot) return [userMessage];
+        if (parentId == null) return [...prev, userMessage];
+        const idx = prev.findIndex((m) => m.id === parentId);
+        if (idx < 0) return [...prev, userMessage];
+        return [...prev.slice(0, idx + 1), userMessage];
+      });
       setInput("");
+      setTargetParentId(null);
+      setBranchFromRoot(false);
       setStreamingContent("");
       streamingRef.current = "";
       setStreamSteps([]);
@@ -413,7 +432,12 @@ export default function ChatPage() {
 
       streamChat(
         CHAT_API,
-        { text, ...(conversationId && { conversation_id: conversationId }) },
+        {
+          text,
+          ...(conversationId && { conversation_id: conversationId }),
+          ...(parentId != null && { prev_message_id: parentId }),
+          ...(fromRoot && { branch_from_root: true }),
+        },
         {
         onThinking: (t) => {
           if (t != null) {
@@ -456,6 +480,8 @@ export default function ChatPage() {
           const finalContent = streamingRef.current;
           const steps = streamStepsRef.current;
           if (opts?.conversation_id) setConversationId(opts.conversation_id);
+          setTargetParentId(null);
+          setBranchFromRoot(false);
           setMessages((prev) => [
             ...prev,
             {
@@ -479,7 +505,7 @@ export default function ChatPage() {
       }
     );
     },
-    [input, isLoading, conversationId]
+    [input, isLoading, conversationId, targetParentId, branchFromRoot]
   );
 
   const grouped = groupConversationsByTime(conversationList);
@@ -591,7 +617,7 @@ export default function ChatPage() {
                     Send a message to start.
                   </p>
                 )}
-                {messages.map((message) => (
+                {messages.map((message, index) => (
                   <div
                     key={message.id}
                     className={cn(
@@ -618,32 +644,54 @@ export default function ChatPage() {
                     {(message.role === "user" || getMessageText(message) !== "") && (
                       <div
                         className={cn(
-                          "flex w-full min-w-0",
+                          "flex w-full min-w-0 flex-col gap-1",
                           message.role === "user"
-                            ? "justify-end"
-                            : "justify-start"
+                            ? "items-end justify-end"
+                            : "items-start justify-start"
                         )}
                       >
-                        <div
-                          className={cn(
-                            "w-full min-w-0 max-w-[85%] overflow-auto rounded-lg px-3 py-2 text-sm",
-                            message.role === "user"
-                              ? "bg-primary text-primary-foreground"
-                              : "bg-muted/60 text-foreground"
-                          )}
-                        >
-                          {message.role === "user" ? (
-                            <p className="min-w-0 whitespace-pre-wrap break-words">
-                              {getMessageText(message)}
-                            </p>
-                          ) : (
-                            <div className="prose prose-sm dark:prose-invert max-w-none break-words [&_pre]:overflow-x-auto [&_pre]:max-w-full [&_ul]:my-1">
-                              <ReactMarkdown>
+                        {message.role === "user" ? (
+                          <div className="group flex w-full min-w-0 max-w-[85%] flex-col items-end gap-1">
+                            <div
+                              className={cn(
+                                "w-full min-w-0 overflow-auto rounded-lg px-3 py-2 text-sm",
+                                "bg-primary text-primary-foreground"
+                              )}
+                            >
+                              <p className="min-w-0 whitespace-pre-wrap break-words">
                                 {getMessageText(message)}
-                              </ReactMarkdown>
+                              </p>
                             </div>
-                          )}
-                        </div>
+                            <MessageToolBar
+                              alignRight
+                              onEdit={() => {
+                                setInput(getMessageText(message));
+                                if (index > 0) {
+                                  setTargetParentId(messages[index - 1].id);
+                                  setBranchFromRoot(false);
+                                } else {
+                                  setTargetParentId(null);
+                                  setBranchFromRoot(true);
+                                }
+                              }}
+                            />
+                          </div>
+                        ) : (
+                          <div className="flex w-full min-w-0 justify-start">
+                            <div
+                              className={cn(
+                                "w-full min-w-0 max-w-[85%] overflow-auto rounded-lg px-3 py-2 text-sm",
+                                "bg-muted/60 text-foreground"
+                              )}
+                            >
+                              <div className="prose prose-sm dark:prose-invert max-w-none break-words [&_pre]:overflow-x-auto [&_pre]:max-w-full [&_ul]:my-1">
+                                <ReactMarkdown>
+                                  {getMessageText(message)}
+                                </ReactMarkdown>
+                              </div>
+                            </div>
+                          </div>
+                        )}
                       </div>
                     )}
                   </div>
@@ -685,6 +733,27 @@ export default function ChatPage() {
                 </Button>
               </div>
             )}
+            {(targetParentId != null || branchFromRoot) && (
+              <div className="flex items-center justify-between gap-2 border-t border-border/60 px-4 py-1.5 text-sm text-muted-foreground">
+                <span>
+                  {branchFromRoot
+                    ? "将从会话开头发送（编辑第一条并重发）"
+                    : "将在此消息后发送（编辑并重发）"}
+                </span>
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="sm"
+                  onClick={() => {
+                    setTargetParentId(null);
+                    setBranchFromRoot(false);
+                    setInput("");
+                  }}
+                >
+                  取消
+                </Button>
+              </div>
+            )}
             <form
               onSubmit={handleSubmit}
               className="flex shrink-0 gap-2 border-t p-4"
@@ -698,7 +767,13 @@ export default function ChatPage() {
                     (e.target as HTMLTextAreaElement).form?.requestSubmit();
                   }
                 }}
-                placeholder="Type a message… (Shift+Enter for new line)"
+                placeholder={
+                  branchFromRoot
+                    ? "修改后发送，将从会话开头重新开始…"
+                    : targetParentId != null
+                      ? "修改后发送，将接在上方选中消息后…"
+                      : "Type a message… (Shift+Enter for new line)"
+                }
                 disabled={isLoading}
                 rows={1}
                 className="border-input placeholder:text-muted-foreground focus-visible:border-ring focus-visible:ring-ring/50 focus-visible:ring-[3px] dark:bg-input/30 min-h-9 w-full min-w-0 flex-1 resize-y rounded-md border border-input bg-transparent px-3 py-2 text-base shadow-xs outline-none disabled:pointer-events-none disabled:opacity-50 md:text-sm max-h-[12rem]"

@@ -189,16 +189,20 @@
              raw)))))
 
 (defn append-messages!
-  "在 prev-message-id 之后追加一串消息；正文写入 resource-store，Datomic 只存 content-resource-id。"
+  "在 prev-message-id 之后追加一串消息；正文写入 resource-store，Datomic 只存 content-resource-id。
+   opts 可选 {:root-branch? true}：从根分叉，prev-id 为 nil，不接在任何已有消息后。"
   ([conn conversation-id new-messages resource-store]
-   (append-messages! conn conversation-id new-messages nil true resource-store))
+   (append-messages! conn conversation-id new-messages nil true resource-store nil))
   ([conn conversation-id new-messages prev-message-id resource-store]
-   (append-messages! conn conversation-id new-messages prev-message-id true resource-store))
+   (append-messages! conn conversation-id new-messages prev-message-id true resource-store nil))
   ([conn conversation-id new-messages prev-message-id update-main-head? resource-store]
+   (append-messages! conn conversation-id new-messages prev-message-id update-main-head? resource-store nil))
+  ([conn conversation-id new-messages prev-message-id update-main-head? resource-store opts]
    (when (and (seq new-messages) resource-store)
      (let [db (d/db conn)
            main-head (get-head conn conversation-id)
-           prev-id (or prev-message-id main-head)
+           root-branch? (get opts :root-branch? false)
+           prev-id (if root-branch? nil (or prev-message-id main-head))
            update-head? (and update-main-head?
                              (or (nil? prev-id)
                                  (and main-head (= prev-id main-head))))

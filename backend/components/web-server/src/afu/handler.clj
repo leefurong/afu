@@ -115,8 +115,9 @@
           tool-msgs)))
 
 (defn- write-event-ch-to-stream
-  "把 event ch 里的事件写成 NDJSON 到 out；收集 content 与 tool_call/tool_result 用于会话历史；:done 时按 LLM 消息格式（assistant+tool_calls, role=tool）追加。"
-  [ch out conn conversation-id user-text branch-head update-main-head?]
+  "把 event ch 里的事件写成 NDJSON 到 out；收集 content 与 tool_call/tool_result 用于会话历史；:done 时按 LLM 消息格式（assistant+tool_calls, role=tool）追加。
+   root-branch? 为 true 时从根分叉，append 时 prev 为 nil。"
+  [ch out conn conversation-id user-text branch-head update-main-head? root-branch?]
   (let [content-acc (StringBuilder.)
         tool-steps (atom [])]
     (loop []
@@ -138,7 +139,9 @@
                             new-msgs (into [{:role "user" :content user-text}]
                                            (cond-> (or api-shaped [])
                                              (seq final-content) (conj {:role "assistant" :content final-content})))
-                            new-ids (conversation/append-messages! conn conversation-id new-msgs branch-head update-main-head? (get-resource-store))]
+                            new-ids (if root-branch?
+                                      (conversation/append-messages! conn conversation-id new-msgs nil update-main-head? (get-resource-store) {:root-branch? true})
+                                      (conversation/append-messages! conn conversation-id new-msgs branch-head update-main-head? (get-resource-store)))]
                         (when (and (seq steps) (seq new-ids))
                           (let [ctx (exec-ctx/get-or-create-ctx conversation-id)]
                             (doseq [i (range (/ (count steps) 2))]
@@ -200,6 +203,11 @@
         raw
         (try (java.util.UUID/fromString (str raw)) (catch Exception _ nil))))))
 
+(defn- resolve-branch-from-root
+  "从 body 取 branch_from_root（编辑第一条消息时从根分叉），boolean。"
+  [body]
+  (boolean (or (get body :branch_from_root) (get body "branch_from_root"))))
+
 (defn chat-handler
   "POST /api/chat：支持会话历史与 fork。body 可带 conversation_id（可选）、prev_message_id（可选，fork 时指定「在此之后追加」）、text 或 messages。
    无 conversation_id 时新建会话；有则按 prev_message_id 或主分支 head 加载该分支历史，拼上本条 user 消息后请求 agent；流式返回，:done 时写回并返回 conversation_id。"
@@ -210,9 +218,12 @@
         _          (println "[chat] request body keys:" (keys body) "user-text len:" (count (str user-text)) "conv-id from body?" (boolean (resolve-conversation-id body)))
         conv-id    (or (resolve-conversation-id body) (conversation/create! conn))
         prev-msg-id (resolve-prev-message-id body)
-        ;; 当前分支头：客户端传 prev_message_id 表示在该条之后续写（含 fork），否则用主分支 head
-        branch-head (or prev-msg-id (conversation/get-head conn conv-id))
-        _          (println "[chat] conv-id:" conv-id "branch-head:" branch-head "fork?" (boolean prev-msg-id))
+        branch-from-root? (resolve-branch-from-root body)
+        ;; 当前分支头：branch_from_root 时从根分叉（无历史）；否则 prev_message_id 或主分支 head
+        branch-head (cond branch-from-root? nil
+                          prev-msg-id prev-msg-id
+                          :else (conversation/get-head conn conv-id))
+        _          (println "[chat] conv-id:" conv-id "branch-head:" branch-head "fork?" (boolean prev-msg-id) "branch-from-root?" branch-from-root?)
         history    (conversation/get-messages conn conv-id branch-head (get-resource-store))
         ;; 若历史中有 execute_clojure 的 tool 结果（带 sci-context-snapshot），恢复该条对应的 ctx 供本轮使用
         _          (let [with-snapshot (filter :sci-context-snapshot history)
@@ -248,7 +259,9 @@
                (fn [out]
                  (try
                    (println "[chat] stream producer started, reading from ch ...")
-                   (write-event-ch-to-stream ch out conn conv-id (or user-text "") branch-head (nil? prev-msg-id))
+                   (write-event-ch-to-stream ch out conn conv-id (or user-text "") branch-head
+                                             (and (nil? prev-msg-id) (not branch-from-root?))
+                                             branch-from-root?)
                    (println "[chat] stream producer finished (ch closed)")
                    (catch Throwable t
                      (println "[chat] stream producer error:" (.getMessage t))

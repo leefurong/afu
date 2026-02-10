@@ -27,6 +27,10 @@ type NDJSONEvent = {
 export type ChatRequestBody = {
   text: string;
   conversation_id?: string;
+  /** 在此消息之后追加（fork）；不传则接在主分支 head 后 */
+  prev_message_id?: string;
+  /** 编辑第一条消息时从根分叉，新消息不接在任何已有消息后 */
+  branch_from_root?: boolean;
 };
 
 function isNetworkError(e: unknown): boolean {
