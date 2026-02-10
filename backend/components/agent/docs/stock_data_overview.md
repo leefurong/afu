@@ -73,9 +73,9 @@ LLM 只能通过 `execute_clojure` 调用以下 stock API（见 `sci_sandbox.clj
 
 | 接口 | 不足判定 | 异步触发的函数 | 说明 |
 |------|----------|----------------------|------|
-| **cross-signals-on-date** | 该日、给定 codes 在 DB 的**行数** &lt; 1000 | `ensure-range-and-update-ma-for-codes!` | 按「该交易日 −60 日」到「该交易日」补日 K 并算 MA/金叉写库 |
-| **get-daily-k-for-multiple-stocks** | 本次**缓存行数** &lt; 1000 | `ensure-range-and-update-ma-for-codes-range!` | 按请求的 date-from～date-to 补日 K 并算 MA/金叉写库 |
-| **ma-for-multiple-stocks** | 本次读到的**缓存行数** &lt; 1000 | `ensure-range-and-update-ma-for-codes-range!` | 同 get-daily-k，按 MA 使用的区间补日 K 并算 MA/金叉写库 |
+| **cross-signals-on-date** | 该日在 DB 的行数（含占位符）&lt; 股票数 | `ensure-range-and-update-ma-for-codes!` | 按「该交易日 −60 日」到「该交易日」补日 K 并算 MA/金叉写库 |
+| **get-daily-k-for-multiple-stocks** | 返回数据的最早/最晚日期未覆盖请求区间 [date-from, date-to] | `ensure-range-and-update-ma-for-codes-range!` | 按请求的 date-from～date-to 补日 K 并算 MA/金叉写库 |
+| **ma-for-multiple-stocks** | 返回数据的最早/最晚日期未覆盖 MA 所用区间 [start-d, date-to] | `ensure-range-and-update-ma-for-codes-range!` | 同 get-daily-k，按 MA 使用的区间补日 K 并算 MA/金叉写库 |
 
 ### 4.3 链式写回（补日 K 时顺带算 MA、金叉死叉）
 

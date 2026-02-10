@@ -56,7 +56,7 @@
   (tushare/request-tushare-api api-name params))
 
 (defn get-daily-k-for-multiple-stocks
-  "多股票日 K：仅从本地缓存读取 [date-from, date-to]；若数据条数不足 1000 会异步触发补数并算 MA 写库，本次仍只返回当前缓存。
+  "多股票日 K：仅从本地缓存读取 [date-from, date-to]；若返回数据的最早/最晚日期未覆盖请求区间则异步触发补数并算 MA 写库，本次仍只返回当前缓存。
    - 返回 {:ok {:fields _ :by_ts_code _ :backfill_triggered _}} 或 {:error _}；:backfill_triggered 为 true 表示已触发异步补数。"
   [stock-codes date-from date-to]
   (let [from-str (str date-from)
@@ -68,8 +68,10 @@
       (not (parse-ymd to-str)) {:error "date-to 格式须为 YYYYMMDD。"}
       (> (compare from-str to-str) 0) {:error "date-from 不能晚于 date-to。"}
       :else
-      (let [rows      (k-line-store/get-daily-k-for-multiple-stocks-from-cache-only ts-codes from-str to-str)
-            backfill? (and (some? rows) (< (count rows) 1000) (seq ts-codes))]
+      (let [rows        (k-line-store/get-daily-k-for-multiple-stocks-from-cache-only ts-codes from-str to-str)
+            by-code     (when rows (group-by :ts_code rows))
+            sufficient? (cache-covers-range? rows by-code ts-codes from-str to-str)
+            backfill?   (and (some? rows) (seq ts-codes) (not sufficient?))]
         (when backfill?
           (future (k-line-store/ensure-range-and-update-ma-for-codes-range! ts-codes from-str to-str)))
         (if (nil? rows)
@@ -109,6 +111,24 @@
   "取 row（map，含 :trade_date）的 trade_date 并转为可比较的 YYYYMMDD 字符串。"
   [row]
   (str (get row :trade_date "")))
+
+(defn- rows-cover-range?
+  "code-rows 为某只股票在 get-daily-k-for-multiple-stocks-from-cache-only 返回中的行。
+   若其最早、最晚 trade_date 覆盖 [want-from, want-to]（闭区间）则返回 true，否则 false。"
+  [code-rows want-from want-to]
+  (when (seq code-rows)
+    (let [dates (mapv #(str (:trade_date %)) code-rows)
+          min-d (apply min dates)
+          max-d (apply max dates)]
+      (and (<= (compare min-d (str want-from)) 0)
+           (>= (compare max-d (str want-to)) 0)))))
+
+(defn- cache-covers-range?
+  "rows 为 from-cache-only 返回的序列，by-code 为 (group-by :ts_code rows)。
+   当每只股票的返回数据都覆盖 [want-from, want-to] 时返回 true。"
+  [rows by-code ts-codes want-from want-to]
+  (and (some? rows) (seq ts-codes)
+       (every? #(rows-cover-range? (get by-code % []) want-from want-to) ts-codes)))
 
 (defn- ma-from-payload-by-range
   "根据日 K payload 计算 MA，仅返回 [date-from, date-to] 区间内（含）每个交易日的 items。
@@ -177,16 +197,17 @@
            (nil? start-d) {:error "date-from 格式须为 YYYYMMDD。"}
            (nil? rows) {:error "K 线缓存未初始化"}
            :else
-           (let [by-code   (group-by :ts_code rows)
-                 results   (map (fn [code]
-                                  (let [code-rows (sort-by #(str (:trade_date %)) (get by-code code []))
-                                        payload   {:fields default-daily-fields
-                                                   :items  (mapv #(update % :trade_date str) code-rows)}
-                                        res      (ma-from-payload-by-range payload ma-days from-str to-str)]
-                                    [code res]))
-                                ts-codes)
-                 first-err (first (keep (fn [[_code res]] (when (:error res) res)) results))
-                 backfill? (and (< (count rows) 1000) (seq ts-codes))]
+           (let [by-code     (group-by :ts_code rows)
+                 results     (map (fn [code]
+                                    (let [code-rows (sort-by #(str (:trade_date %)) (get by-code code []))
+                                          payload   {:fields default-daily-fields
+                                                     :items  (mapv #(update % :trade_date str) code-rows)}
+                                          res       (ma-from-payload-by-range payload ma-days from-str to-str)]
+                                      [code res]))
+                                  ts-codes)
+                 first-err   (first (keep (fn [[_code res]] (when (:error res) res)) results))
+                 sufficient? (cache-covers-range? rows by-code ts-codes start-d to-str)
+                 backfill?   (and (seq ts-codes) (not sufficient?))]
              (when backfill?
                (future (k-line-store/ensure-range-and-update-ma-for-codes-range! ts-codes start-d to-str)))
              (if first-err
@@ -302,7 +323,8 @@
         :pagination  {:total_pages 0 :per_page per-page :current_page 1 :total_golden_cross 0 :total_death_cross 0}
         :golden_cross [] :death_cross []}
        (let [data-count   (or (k-line-store/get-row-count-by-date-and-codes trade-date ts-codes) 0)
-             backfill?    (and (< data-count 1000) (seq ts-codes))
+             expected     (count ts-codes)
+             backfill?    (and (seq ts-codes) (< data-count expected))
              _            (when backfill?
                             (future (k-line-store/ensure-range-and-update-ma-for-codes! ts-codes trade-date)))
              golden       (or (k-line-store/get-rows-by-date-and-codes-with-cross-type trade-date ts-codes "金叉") [])
