@@ -2,6 +2,8 @@
 
 本文档是「从零重写」k_line_store 的完整设计依据：拓展策略、存储语义、技术选型与路径约定。实现时按此文档来，避免与旧 Datomic 实现混淆。
 
+**总览**：全量代码、Tushare、日 K 缓存、MA、金叉死叉与对 LLM 的接口说明见 [stock_data_overview.md](./stock_data_overview.md)。
+
 ---
 
 ## 1. 问题与目标
