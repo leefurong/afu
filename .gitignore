@@ -48,4 +48,4 @@ coverage/
 logs/
 backend/backend/data/sqlite.db
 .calva
-backend/data
+data/
