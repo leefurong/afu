@@ -1,9 +1,13 @@
 (ns stock-test
   "测试 stock 命名空间：get-daily-k、ma、golden-cross 的返回结构与数值正确性。使用固定 fixture 数据，不依赖 Tushare。"
   (:require [clojure.test :refer [deftest is testing]]
+            [clojure.set :as set]
             [clojure.string :as str]
             [agent.tools.execute-clojure.sci-sandbox.k-line-store :as k]
-            [agent.tools.execute-clojure.sci-sandbox.stock :as stock]))
+            [agent.tools.execute-clojure.sci-sandbox.stock :as stock])
+  (:import [java.time LocalDate]
+           [java.time.format DateTimeFormatter]
+           [java.time.temporal ChronoUnit]))
 
 ;; 25 个交易日：20250102～20250205（跳过周末）
 (def ^:private fixture-dates
@@ -101,6 +105,22 @@
               (is (approx= expected-golden-cross-long-ma (:ma20 c) 0.01)
                   (str "ma20 应为 " expected-golden-cross-long-ma)))))))))
 
+(deftest cross-signals-on-date-matches-ma-criteria
+  "cross-signals-on-date 返回的金叉/死叉清单，必须与按 MA5/MA20 现算结果一致：金叉日该码在 golden_cross，非金叉日不在。"
+  (setup-fixture! "000001.SZ")
+  ;; 同步写 MA 与 cross_type 到 DB（与 k_line_store 写库逻辑一致）
+  (k/update-ma-for-stock-date-range! "000001.SZ" "20250102" "20250205" false)
+  (testing "20250204 为金叉日，cross-signals-on-date 当日应包含 000001.SZ 在 golden_cross"
+    (let [res (stock/cross-signals-on-date ["000001.SZ"] "20250204")]
+      (is (some #(= (:ts_code %) "000001.SZ") (:golden_cross res))
+          "金叉日 20250204 应在 golden_cross 清单中")
+      (is (not (some #(= (:ts_code %) "000001.SZ") (:death_cross res)))
+          "金叉日不应在 death_cross 中")))
+  (testing "20250203 非金叉日，cross-signals-on-date 当日不应在 golden_cross"
+    (let [res (stock/cross-signals-on-date ["000001.SZ"] "20250203")]
+      (is (not (some #(= (:ts_code %) "000001.SZ") (:golden_cross res)))
+          "前一日 20250203 尚未金叉，不应在 golden_cross 中"))))
+
 (deftest ma-period-validation
   (setup-fixture! "000001.SZ")
   (testing "ma-for-multiple-stocks period < 2 返回错误"
@@ -110,3 +130,64 @@
     (is (str/includes?
          (str (:error (stock/golden-cross-for-multiple-stocks ["000001.SZ"] 20 5 "20250102" "20250205")))
          "短期周期应小于长期周期"))))
+
+(def ^:private basic-iso (DateTimeFormatter/ofPattern "yyyyMMdd"))
+
+(deftest cross-signals-on-date-real-data-consistent-with-ma
+  "真实数据测试：调 cross-signals-on-date，若无数据会触发 backfill 则等 3 秒后再查；用 MA 接口取当日及前日 MA5/MA20，
+   按金叉定义计算是否金叉，与 cross-signals 返回的 golden_cross 清单比对是否一致。
+   使用文件 DB（非全新库，可能已有历史数据）；日期与股票代码放在 let 中便于修改。"
+  (let [trade-date "20250506"
+        code      "000623.SZ"
+        codes     [code]
+        date-from (-> (LocalDate/parse trade-date basic-iso)
+                      (.minus 60 ChronoUnit/DAYS)
+                      (.format basic-iso))]
+    (k/reset-for-test!)
+    (k/ensure-schema! nil)
+    (let [res1 (stock/cross-signals-on-date codes trade-date)
+          stock-count (get-in res1 [:summary :stock_count] 0)
+          data-count  (get-in res1 [:summary :data_count] 0)
+          triggered?  (get-in res1 [:summary :backfill_triggered])]
+      (when (and (= stock-count 1) (= data-count 0))
+        (is triggered? "stock_count 1 且 data_count 0 时必须触发 backfill_triggered"))
+      (when triggered?
+        (Thread/sleep 3000))
+      (let [res2     (stock/cross-signals-on-date codes trade-date)
+          in-golden? (boolean (some #(= (:ts_code %) code) (:golden_cross res2)))
+          ma5-res  (stock/ma-for-multiple-stocks codes 5 date-from trade-date)
+          ma20-res (stock/ma-for-multiple-stocks codes 20 date-from trade-date)]
+      (is (not (:error ma5-res)) (str "MA5 应成功: " ma5-res))
+      (is (not (:error ma20-res)) (str "MA20 应成功: " ma20-res))
+      (when (and (not (:error ma5-res)) (not (:error ma20-res)))
+        (let [items-5   (get-in ma5-res [:ok :by_ts_code code :items])
+              items-20  (get-in ma20-res [:ok :by_ts_code code :items])
+              by-date-5 (into {} (for [item (seq (or items-5 []))
+                                      :when (map? item)
+                                      :let [d (str (get item :trade_date))]
+                                      :when (seq d)]
+                                  [d item]))
+              by-date-20 (into {} (for [item (seq (or items-20 []))
+                                       :when (map? item)
+                                       :let [d (str (get item :trade_date))]
+                                       :when (seq d)]
+                                   [d item]))
+              dates     (sort (seq (set/intersection (set (keys by-date-5)) (set (keys by-date-20)))))
+              merged    (mapv (fn [d]
+                               (let [a (get by-date-5 d), b (get by-date-20 d)]
+                                 {:date d :ma5 (:ma5 a) :ma20 (:ma20 b)}))
+                              dates)]
+          (when (>= (count merged) 2)
+            (let [prev   (nth merged (- (count merged) 2))
+                  curr   (nth merged (dec (count merged)))
+                  p5     (:ma5 prev)
+                  p20    (:ma20 prev)
+                  c5     (:ma5 curr)
+                  c20    (:ma20 curr)
+                  golden-by-ma? (and (number? p5) (number? p20) (number? c5) (number? c20)
+                                     (<= p5 p20) (> c5 c20))]
+              (is (and in-golden? golden-by-ma?)
+                  (str "cross-signals 清单与按 MA 现算应一致: 当日 " trade-date " " code
+                       " in_golden_cross=" in-golden?
+                       " 按MA金叉=" golden-by-ma?
+                       " (prev MA5=" p5 " MA20=" p20 " curr MA5=" c5 " MA20=" c20 ")"))))))))))
