@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect, useMemo } from "react";
+import { useState, useRef, useEffect, useMemo, useCallback } from "react";
 import {
   Sheet,
   SheetContent,
@@ -12,59 +12,15 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Plus } from "lucide-react";
 import { MemoryItemCard, type MemoryItem } from "@/components/memory-item-card";
 import { MemorySection } from "@/components/memory-section";
+import {
+  listMemories,
+  addMemory,
+  updateMemory,
+  deleteMemory,
+} from "@/services/memory";
 
 const SESSION_RELATED_COUNT = 5;
 const PAGE_SIZE = 10;
-
-function createMockMemory(
-  id: string,
-  content: string,
-  minutesAgo: number
-): MemoryItem {
-  return {
-    id,
-    content,
-    createdAt: new Date(Date.now() - minutesAgo * 60 * 1000),
-  };
-}
-
-const MOCK_ALL_MEMORIES: MemoryItem[] = [
-  createMockMemory(
-    "1",
-    "用户正在开发一个以客户为中心的智能体项目，以智能客户代理和真人居间团队相结合的商业模式为主，计划以高科技智能背景为基础，提供软件开发、采购代理、咨询等多项服务。",
-    5
-  ),
-  createMockMemory(
-    "2",
-    "用户偏好使用 Next.js 与 TypeScript 进行前端开发，后端使用 Clojure。",
-    2 * 60
-  ),
-  createMockMemory("3", "用户关注股票数据与均线金叉等信号验证。", 24 * 60),
-  createMockMemory("4", "用户常使用 Cursor 与 Calva 进行开发。", 2 * 24 * 60),
-  createMockMemory("5", "用户对无限记忆与长程上下文能力有需求。", 3 * 24 * 60),
-  createMockMemory("6", "项目代号阿福，目标是打造能听懂话、能跑代码的智能体。", 4 * 24 * 60),
-  createMockMemory("7", "技术栈包含 SCI 沙盒、Datomic、resource-store。", 5 * 24 * 60),
-  createMockMemory("8", "对话与消息正文存 resource-store，Datomic 只存结构。", 6 * 24 * 60),
-  createMockMemory("9", "用户希望记忆支持向量检索与自然语言搜索。", 7 * 24 * 60),
-  createMockMemory("10", "黄伟伟要的全套功能可通过聊天窗口与 SCI 函数实现。", 8 * 24 * 60),
-  createMockMemory("11", "短信通知可附带通向聊天线索的 URL。", 9 * 24 * 60),
-  createMockMemory("12", "定时任务让用户设定未来发生的事件。", 10 * 24 * 60),
-  createMockMemory("13", "福聊中话题独立但信息互通。", 11 * 24 * 60),
-  createMockMemory("14", "后端使用 reitit 做路由，next.jdbc 与 honey.sql。", 12 * 24 * 60),
-  createMockMemory("15", "前端使用 Shadcn UI 与 Tailwind。", 13 * 24 * 60),
-  createMockMemory("16", "消息可编辑重发，支持从根分叉或接在选中消息后。", 14 * 24 * 60),
-  createMockMemory("17", "K 线数据有缓存与增量更新逻辑。", 15 * 24 * 60),
-  createMockMemory("18", "tushare 用于获取股票行情。", 16 * 24 * 60),
-  createMockMemory("19", "Agent 可主动发言，基于定时任务。", 17 * 24 * 60),
-  createMockMemory("20", "Code is Data 为第一性原理。", 18 * 24 * 60),
-];
-
-function textMatch(content: string, query: string): boolean {
-  const q = query.trim();
-  if (!q) return true;
-  const terms = q.split(/\s+/).filter(Boolean);
-  return terms.every((term) => content.includes(term));
-}
 
 export type { MemoryItem };
 
@@ -74,7 +30,11 @@ type ManageMemorySheetProps = {
 };
 
 export function ManageMemorySheet({ open, onOpenChange }: ManageMemorySheetProps) {
-  const [allMemories, setAllMemories] = useState<MemoryItem[]>(MOCK_ALL_MEMORIES);
+  const [sessionMemories, setSessionMemories] = useState<MemoryItem[]>([]);
+  const [mainList, setMainList] = useState<MemoryItem[]>([]);
+  const [totalCount, setTotalCount] = useState(0);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingContent, setEditingContent] = useState("");
@@ -85,33 +45,70 @@ export function ManageMemorySheet({ open, onOpenChange }: ManageMemorySheetProps
   const [searchPage, setSearchPage] = useState(1);
   const menuRef = useRef<HTMLDivElement>(null);
 
-  const sessionMemories = useMemo(
-    () =>
-      [...allMemories]
-        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
-        .slice(0, SESSION_RELATED_COUNT),
-    [allMemories]
-  );
-
-  const searchResults = useMemo(() => {
-    const q = searchQuery.trim();
-    if (!q) return [];
-    return allMemories.filter((m) => textMatch(m.content, q));
-  }, [allMemories, searchQuery]);
-
   const isSearchMode = searchQuery.trim() !== "";
-  const allListToShow = isSearchMode ? searchResults : allMemories;
-  const totalPages = Math.max(1, Math.ceil(allListToShow.length / PAGE_SIZE));
   const currentPage = isSearchMode ? searchPage : allPage;
   const setCurrentPage = isSearchMode ? setSearchPage : setAllPage;
-  const paginatedList = useMemo(
-    () =>
-      allListToShow.slice(
-        (currentPage - 1) * PAGE_SIZE,
-        currentPage * PAGE_SIZE
-      ),
-    [allListToShow, currentPage]
+  const totalPages = Math.max(1, Math.ceil(totalCount / PAGE_SIZE));
+
+  const fetchSession = useCallback(async () => {
+    const { items } = await listMemories({ pageSize: SESSION_RELATED_COUNT });
+    setSessionMemories(items);
+  }, []);
+
+  const fetchMain = useCallback(
+    async (page: number, q: string) => {
+      setLoading(true);
+      setError(null);
+      try {
+        const { items, totalCount: total } = await listMemories({
+          page,
+          pageSize: PAGE_SIZE,
+          q: q.trim() || undefined,
+        });
+        setMainList(items);
+        setTotalCount(total);
+      } catch (e) {
+        setError(e instanceof Error ? e.message : "加载失败");
+        setMainList([]);
+        setTotalCount(0);
+      } finally {
+        setLoading(false);
+      }
+    },
+    []
   );
+
+  const [debouncedQuery, setDebouncedQuery] = useState("");
+  const lastFetchRef = useRef({ page: 0, query: "" });
+  useEffect(() => {
+    if (!open) return;
+    const t = setTimeout(() => setDebouncedQuery(searchQuery), 300);
+    return () => clearTimeout(t);
+  }, [open, searchQuery]);
+
+  useEffect(() => {
+    if (!open) return;
+    setError(null);
+    fetchSession();
+  }, [open, fetchSession]);
+
+  useEffect(() => {
+    if (!open) return;
+    const page =
+      debouncedQuery !== lastFetchRef.current.query ? 1 : currentPage;
+    if (debouncedQuery !== lastFetchRef.current.query) {
+      setAllPage(1);
+      setSearchPage(1);
+    }
+    if (
+      lastFetchRef.current.page === page &&
+      lastFetchRef.current.query === debouncedQuery
+    ) {
+      return;
+    }
+    lastFetchRef.current = { page, query: debouncedQuery };
+    fetchMain(page, debouncedQuery);
+  }, [open, currentPage, debouncedQuery, isSearchMode, fetchMain]);
 
   useEffect(() => {
     if (!open) {
@@ -121,7 +118,6 @@ export function ManageMemorySheet({ open, onOpenChange }: ManageMemorySheetProps
       setAddDraft("");
     }
   }, [open]);
-
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -133,28 +129,23 @@ export function ManageMemorySheet({ open, onOpenChange }: ManageMemorySheetProps
     return () => document.removeEventListener("click", handleClickOutside);
   }, []);
 
-  const updateMemory = (id: string, updater: (m: MemoryItem) => MemoryItem) => {
-    setAllMemories((prev) =>
-      prev.map((m) => (m.id === id ? updater(m) : m))
-    );
-  };
-
-  const removeMemory = (id: string) => {
-    setOpenMenuId(null);
-    setAllMemories((prev) => prev.filter((m) => m.id !== id));
-  };
-
   const handleEdit = (item: MemoryItem) => {
     setOpenMenuId(null);
     setEditingId(item.id);
     setEditingContent(item.content);
   };
 
-  const handleSaveEdit = () => {
+  const handleSaveEdit = async () => {
     if (!editingId) return;
-    updateMemory(editingId, (m) => ({ ...m, content: editingContent }));
-    setEditingId(null);
-    setEditingContent("");
+    try {
+      await updateMemory(editingId, editingContent);
+      setEditingId(null);
+      setEditingContent("");
+      fetchSession();
+      fetchMain(currentPage, debouncedQuery);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "保存失败");
+    }
   };
 
   const handleCancelEdit = () => {
@@ -162,21 +153,29 @@ export function ManageMemorySheet({ open, onOpenChange }: ManageMemorySheetProps
     setEditingContent("");
   };
 
-  const handleForget = (id: string) => removeMemory(id);
+  const handleForget = async (id: string) => {
+    setOpenMenuId(null);
+    try {
+      await deleteMemory(id);
+      fetchSession();
+      fetchMain(currentPage, debouncedQuery);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "删除失败");
+    }
+  };
 
-  const handleAddSubmit = () => {
+  const handleAddSubmit = async () => {
     const trimmed = addDraft.trim();
     if (!trimmed) return;
-    setAllMemories((prev) => [
-      {
-        id: crypto.randomUUID(),
-        content: trimmed,
-        createdAt: new Date(),
-      },
-      ...prev,
-    ]);
-    setAddDraft("");
-    setAddFormVisible(false);
+    try {
+      await addMemory(trimmed);
+      setAddDraft("");
+      setAddFormVisible(false);
+      fetchSession();
+      fetchMain(currentPage, debouncedQuery);
+    } catch (e) {
+      setError(e instanceof Error ? e.message : "添加失败");
+    }
   };
 
   const renderCard = (item: MemoryItem) => (
@@ -225,6 +224,9 @@ export function ManageMemorySheet({ open, onOpenChange }: ManageMemorySheetProps
 
         <ScrollArea className="min-h-0 flex-1 px-4 py-3">
           <div className="flex flex-col gap-4">
+            {error && (
+              <p className="text-destructive text-sm">{error}</p>
+            )}
             {addFormVisible && (
               <div className="rounded-lg border bg-muted/30 p-3">
                 <textarea
@@ -250,7 +252,7 @@ export function ManageMemorySheet({ open, onOpenChange }: ManageMemorySheetProps
                     type="button"
                     size="sm"
                     onClick={handleAddSubmit}
-                    disabled={!addDraft.trim()}
+                    disabled={!addDraft.trim() || loading}
                   >
                     保存
                   </Button>
@@ -269,8 +271,8 @@ export function ManageMemorySheet({ open, onOpenChange }: ManageMemorySheetProps
 
             <MemorySection
               title={isSearchMode ? "搜索记忆" : "所有记忆"}
-              searchResultCount={allListToShow.length}
-              list={paginatedList}
+              searchResultCount={mainList.length}
+              list={mainList}
               pagination={
                 totalPages > 1
                   ? {
@@ -287,7 +289,9 @@ export function ManageMemorySheet({ open, onOpenChange }: ManageMemorySheetProps
               }
               expandByDefault={false}
               renderItem={renderCard}
-              emptyMessage={isSearchMode ? "无匹配记忆" : "暂无记忆"}
+              emptyMessage={
+                loading ? "加载中…" : isSearchMode ? "无匹配记忆" : "暂无记忆"
+              }
               onExpand={() => {
                 setAllPage(1);
                 setSearchPage(1);
@@ -300,7 +304,7 @@ export function ManageMemorySheet({ open, onOpenChange }: ManageMemorySheetProps
                 },
                 placeholder: "自然语言搜索记忆…",
               }}
-              totalCount={allMemories.length}
+              totalCount={totalCount}
               pageSize={PAGE_SIZE}
             />
           </div>
