@@ -36,5 +36,5 @@
   "返回 (fn [text] embedding-vector)，供 memory-store 使用。"
   []
   (fn [text]
-    (when-let [vec (embed text)]
-      (vec vec))))
+    (when-let [v (embed text)]
+      (vec v))))
