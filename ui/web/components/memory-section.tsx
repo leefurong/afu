@@ -20,6 +20,7 @@ export type MemorySectionSearch = {
 
 export type MemorySectionProps = {
   title: string;
+  searchResultCount?: number;
   list: MemoryItem[];
   pagination?: MemorySectionPagination | null;
   expandByDefault?: boolean;
@@ -29,10 +30,6 @@ export type MemorySectionProps = {
   extraContent?: React.ReactNode;
   /** 首次展开时调用（用于如重置分页） */
   onExpand?: () => void;
-  /**
-   * 搜索：传入后，仅在 条目总数 > pageSize 时在区块内显示搜索框。
-   * 需同时传入 totalCount 与 pageSize 以判断是否显示。
-   */
   search?: MemorySectionSearch;
   totalCount?: number;
   pageSize?: number;
@@ -40,6 +37,7 @@ export type MemorySectionProps = {
 
 export function MemorySection({
   title,
+  searchResultCount,
   list,
   pagination = null,
   expandByDefault = false,
@@ -76,6 +74,11 @@ export function MemorySection({
           <ChevronRight className="size-4 shrink-0" />
         )}
         {title}
+        {searchResultCount != null && (
+          <span className="text-muted-foreground font-normal">
+            （{searchResultCount} 条）
+          </span>
+        )}
       </button>
 
       {expanded && (

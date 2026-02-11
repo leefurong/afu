@@ -260,6 +260,7 @@ export function ManageMemorySheet({ open, onOpenChange }: ManageMemorySheetProps
 
             <MemorySection
               title="当前会话相关"
+              searchResultCount={sessionMemories.length}
               list={sessionMemories}
               expandByDefault={true}
               renderItem={renderCard}
@@ -267,11 +268,8 @@ export function ManageMemorySheet({ open, onOpenChange }: ManageMemorySheetProps
             />
 
             <MemorySection
-              title={
-                isSearchMode
-                  ? `搜索记忆（${searchResults.length} 条）`
-                  : "所有记忆"
-              }
+              title={isSearchMode ? "搜索记忆" : "所有记忆"}
+              searchResultCount={allListToShow.length}
               list={paginatedList}
               pagination={
                 totalPages > 1
