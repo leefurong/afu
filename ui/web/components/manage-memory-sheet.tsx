@@ -1,6 +1,6 @@
 "use client";
 
-import { useState, useRef, useEffect } from "react";
+import { useState, useRef, useEffect, useMemo } from "react";
 import {
   Sheet,
   SheetContent,
@@ -9,47 +9,64 @@ import {
 } from "@/components/ui/sheet";
 import { Button } from "@/components/ui/button";
 import { ScrollArea } from "@/components/ui/scroll-area";
-import { Plus, Pencil, Trash2, MoreVertical } from "lucide-react";
+import { Plus } from "lucide-react";
+import { MemoryItemCard, type MemoryItem } from "@/components/memory-item-card";
+import { MemorySection } from "@/components/memory-section";
 
-const MEMORY_LIMIT = 15;
+const SESSION_RELATED_COUNT = 5;
+const PAGE_SIZE = 10;
 
-export type MemoryItem = {
-  id: string;
-  content: string;
-  createdAt: Date;
-};
-
-function formatRelativeTime(date: Date): string {
-  const now = new Date();
-  const diffMs = now.getTime() - date.getTime();
-  const diffMins = Math.floor(diffMs / 60_000);
-  const diffHours = Math.floor(diffMs / 3_600_000);
-  const diffDays = Math.floor(diffMs / 86_400_000);
-  if (diffMins < 1) return "刚刚";
-  if (diffMins < 60) return `${diffMins}分钟前`;
-  if (diffHours < 24) return `${diffHours}小时前`;
-  if (diffDays < 7) return `${diffDays}天前`;
-  return date.toLocaleDateString();
+function createMockMemory(
+  id: string,
+  content: string,
+  minutesAgo: number
+): MemoryItem {
+  return {
+    id,
+    content,
+    createdAt: new Date(Date.now() - minutesAgo * 60 * 1000),
+  };
 }
 
-const MOCK_MEMORIES: MemoryItem[] = [
-  {
-    id: "1",
-    content:
-      "用户正在开发一个以客户为中心的智能体项目，以智能客户代理和真人居间团队相结合的商业模式为主，计划以高科技智能背景为基础，提供软件开发、采购代理、咨询等多项服务。",
-    createdAt: new Date(Date.now() - 5 * 60 * 1000),
-  },
-  {
-    id: "2",
-    content: "用户偏好使用 Next.js 与 TypeScript 进行前端开发，后端使用 Clojure。",
-    createdAt: new Date(Date.now() - 2 * 60 * 60 * 1000),
-  },
-  {
-    id: "3",
-    content: "用户关注股票数据与均线金叉等信号验证。",
-    createdAt: new Date(Date.now() - 24 * 60 * 60 * 1000),
-  },
+const MOCK_ALL_MEMORIES: MemoryItem[] = [
+  createMockMemory(
+    "1",
+    "用户正在开发一个以客户为中心的智能体项目，以智能客户代理和真人居间团队相结合的商业模式为主，计划以高科技智能背景为基础，提供软件开发、采购代理、咨询等多项服务。",
+    5
+  ),
+  createMockMemory(
+    "2",
+    "用户偏好使用 Next.js 与 TypeScript 进行前端开发，后端使用 Clojure。",
+    2 * 60
+  ),
+  createMockMemory("3", "用户关注股票数据与均线金叉等信号验证。", 24 * 60),
+  createMockMemory("4", "用户常使用 Cursor 与 Calva 进行开发。", 2 * 24 * 60),
+  createMockMemory("5", "用户对无限记忆与长程上下文能力有需求。", 3 * 24 * 60),
+  createMockMemory("6", "项目代号阿福，目标是打造能听懂话、能跑代码的智能体。", 4 * 24 * 60),
+  createMockMemory("7", "技术栈包含 SCI 沙盒、Datomic、resource-store。", 5 * 24 * 60),
+  createMockMemory("8", "对话与消息正文存 resource-store，Datomic 只存结构。", 6 * 24 * 60),
+  createMockMemory("9", "用户希望记忆支持向量检索与自然语言搜索。", 7 * 24 * 60),
+  createMockMemory("10", "黄伟伟要的全套功能可通过聊天窗口与 SCI 函数实现。", 8 * 24 * 60),
+  createMockMemory("11", "短信通知可附带通向聊天线索的 URL。", 9 * 24 * 60),
+  createMockMemory("12", "定时任务让用户设定未来发生的事件。", 10 * 24 * 60),
+  createMockMemory("13", "福聊中话题独立但信息互通。", 11 * 24 * 60),
+  createMockMemory("14", "后端使用 reitit 做路由，next.jdbc 与 honey.sql。", 12 * 24 * 60),
+  createMockMemory("15", "前端使用 Shadcn UI 与 Tailwind。", 13 * 24 * 60),
+  createMockMemory("16", "消息可编辑重发，支持从根分叉或接在选中消息后。", 14 * 24 * 60),
+  createMockMemory("17", "K 线数据有缓存与增量更新逻辑。", 15 * 24 * 60),
+  createMockMemory("18", "tushare 用于获取股票行情。", 16 * 24 * 60),
+  createMockMemory("19", "Agent 可主动发言，基于定时任务。", 17 * 24 * 60),
+  createMockMemory("20", "Code is Data 为第一性原理。", 18 * 24 * 60),
 ];
+
+function textMatch(content: string, query: string): boolean {
+  const q = query.trim();
+  if (!q) return true;
+  const terms = q.split(/\s+/).filter(Boolean);
+  return terms.every((term) => content.includes(term));
+}
+
+export type { MemoryItem };
 
 type ManageMemorySheetProps = {
   open: boolean;
@@ -57,13 +74,44 @@ type ManageMemorySheetProps = {
 };
 
 export function ManageMemorySheet({ open, onOpenChange }: ManageMemorySheetProps) {
-  const [memories, setMemories] = useState<MemoryItem[]>(MOCK_MEMORIES);
+  const [allMemories, setAllMemories] = useState<MemoryItem[]>(MOCK_ALL_MEMORIES);
   const [openMenuId, setOpenMenuId] = useState<string | null>(null);
   const [editingId, setEditingId] = useState<string | null>(null);
   const [editingContent, setEditingContent] = useState("");
   const [addFormVisible, setAddFormVisible] = useState(false);
   const [addDraft, setAddDraft] = useState("");
+  const [searchQuery, setSearchQuery] = useState("");
+  const [allPage, setAllPage] = useState(1);
+  const [searchPage, setSearchPage] = useState(1);
   const menuRef = useRef<HTMLDivElement>(null);
+
+  const sessionMemories = useMemo(
+    () =>
+      [...allMemories]
+        .sort((a, b) => b.createdAt.getTime() - a.createdAt.getTime())
+        .slice(0, SESSION_RELATED_COUNT),
+    [allMemories]
+  );
+
+  const searchResults = useMemo(() => {
+    const q = searchQuery.trim();
+    if (!q) return [];
+    return allMemories.filter((m) => textMatch(m.content, q));
+  }, [allMemories, searchQuery]);
+
+  const isSearchMode = searchQuery.trim() !== "";
+  const allListToShow = isSearchMode ? searchResults : allMemories;
+  const totalPages = Math.max(1, Math.ceil(allListToShow.length / PAGE_SIZE));
+  const currentPage = isSearchMode ? searchPage : allPage;
+  const setCurrentPage = isSearchMode ? setSearchPage : setAllPage;
+  const paginatedList = useMemo(
+    () =>
+      allListToShow.slice(
+        (currentPage - 1) * PAGE_SIZE,
+        currentPage * PAGE_SIZE
+      ),
+    [allListToShow, currentPage]
+  );
 
   useEffect(() => {
     if (!open) {
@@ -73,6 +121,7 @@ export function ManageMemorySheet({ open, onOpenChange }: ManageMemorySheetProps
       setAddDraft("");
     }
   }, [open]);
+
 
   useEffect(() => {
     const handleClickOutside = (e: MouseEvent) => {
@@ -84,6 +133,17 @@ export function ManageMemorySheet({ open, onOpenChange }: ManageMemorySheetProps
     return () => document.removeEventListener("click", handleClickOutside);
   }, []);
 
+  const updateMemory = (id: string, updater: (m: MemoryItem) => MemoryItem) => {
+    setAllMemories((prev) =>
+      prev.map((m) => (m.id === id ? updater(m) : m))
+    );
+  };
+
+  const removeMemory = (id: string) => {
+    setOpenMenuId(null);
+    setAllMemories((prev) => prev.filter((m) => m.id !== id));
+  };
+
   const handleEdit = (item: MemoryItem) => {
     setOpenMenuId(null);
     setEditingId(item.id);
@@ -92,11 +152,7 @@ export function ManageMemorySheet({ open, onOpenChange }: ManageMemorySheetProps
 
   const handleSaveEdit = () => {
     if (!editingId) return;
-    setMemories((prev) =>
-      prev.map((m) =>
-        m.id === editingId ? { ...m, content: editingContent } : m
-      )
-    );
+    updateMemory(editingId, (m) => ({ ...m, content: editingContent }));
     setEditingId(null);
     setEditingContent("");
   };
@@ -106,15 +162,12 @@ export function ManageMemorySheet({ open, onOpenChange }: ManageMemorySheetProps
     setEditingContent("");
   };
 
-  const handleForget = (id: string) => {
-    setOpenMenuId(null);
-    setMemories((prev) => prev.filter((m) => m.id !== id));
-  };
+  const handleForget = (id: string) => removeMemory(id);
 
   const handleAddSubmit = () => {
     const trimmed = addDraft.trim();
-    if (!trimmed || memories.length >= MEMORY_LIMIT) return;
-    setMemories((prev) => [
+    if (!trimmed) return;
+    setAllMemories((prev) => [
       {
         id: crypto.randomUUID(),
         content: trimmed,
@@ -126,17 +179,36 @@ export function ManageMemorySheet({ open, onOpenChange }: ManageMemorySheetProps
     setAddFormVisible(false);
   };
 
-  const canAdd = memories.length < MEMORY_LIMIT;
+  const renderCard = (item: MemoryItem) => (
+    <MemoryItemCard
+      key={item.id}
+      item={item}
+      isEditing={editingId === item.id}
+      editingContent={editingContent}
+      onEditingContentChange={setEditingContent}
+      onSaveEdit={handleSaveEdit}
+      onCancelEdit={handleCancelEdit}
+      onEdit={() => handleEdit(item)}
+      onForget={() => handleForget(item.id)}
+      menuOpen={openMenuId === item.id}
+      onMenuToggle={() =>
+        setOpenMenuId((id) => (id === item.id ? null : item.id))
+      }
+      menuRef={menuRef}
+    />
+  );
 
   return (
     <Sheet open={open} onOpenChange={onOpenChange}>
       <SheetContent
         side="right"
-        className="flex w-full flex-col gap-0 sm:max-w-md"
+        className="flex min-h-0 w-full flex-col gap-0 overflow-hidden sm:max-w-md"
         showCloseButton={true}
       >
         <SheetHeader className="flex h-12 shrink-0 flex-row items-center gap-2 border-b px-4 pr-12">
-          <SheetTitle className="text-lg font-semibold leading-none">管理记忆</SheetTitle>
+          <SheetTitle className="text-lg font-semibold leading-none">
+            管理记忆
+          </SheetTitle>
           <div className="ml-auto flex h-8 items-center gap-1">
             <Button
               type="button"
@@ -144,7 +216,6 @@ export function ManageMemorySheet({ open, onOpenChange }: ManageMemorySheetProps
               size="icon"
               className="h-8 w-8 shrink-0"
               onClick={() => setAddFormVisible(true)}
-              disabled={!canAdd}
               aria-label="添加记忆"
             >
               <Plus className="size-4" />
@@ -152,12 +223,8 @@ export function ManageMemorySheet({ open, onOpenChange }: ManageMemorySheetProps
           </div>
         </SheetHeader>
 
-        <p className="text-muted-foreground border-b px-4 py-3 text-sm">
-          阿福最多会帮你存储 {MEMORY_LIMIT} 条记忆，记忆条目已满将不会新增记忆条目，阿福会动态地帮你更新和维护已有的记忆内容。
-        </p>
-
-        <ScrollArea className="flex-1 px-4 py-3">
-          <div className="flex flex-col gap-3">
+        <ScrollArea className="min-h-0 flex-1 px-4 py-3">
+          <div className="flex flex-col gap-4">
             {addFormVisible && (
               <div className="rounded-lg border bg-muted/30 p-3">
                 <textarea
@@ -191,85 +258,53 @@ export function ManageMemorySheet({ open, onOpenChange }: ManageMemorySheetProps
               </div>
             )}
 
-            {memories.map((item) => (
-              <div
-                key={item.id}
-                className="rounded-lg border bg-card p-3 text-card-foreground shadow-sm"
-              >
-                {editingId === item.id ? (
-                  <>
-                    <textarea
-                      value={editingContent}
-                      onChange={(e) => setEditingContent(e.target.value)}
-                      rows={3}
-                      className="border-input mb-2 w-full resize-y rounded-md border bg-background px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-ring"
-                    />
-                    <div className="flex justify-end gap-2">
-                      <Button
-                        type="button"
-                        variant="ghost"
-                        size="sm"
-                        onClick={handleCancelEdit}
-                      >
-                        取消
-                      </Button>
-                      <Button type="button" size="sm" onClick={handleSaveEdit}>
-                        保存
-                      </Button>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <p className="text-sm leading-relaxed line-clamp-4">
-                      {item.content}
-                    </p>
-                    <div className="mt-2 flex items-center justify-between gap-2">
-                      <span className="text-muted-foreground text-xs">
-                        {formatRelativeTime(item.createdAt)}
-                      </span>
-                      <div className="relative" ref={openMenuId === item.id ? menuRef : undefined}>
-                        <Button
-                          type="button"
-                          variant="ghost"
-                          size="icon"
-                          className="h-7 w-7"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            setOpenMenuId((id) => (id === item.id ? null : item.id));
-                          }}
-                          aria-label="更多操作"
-                        >
-                          <MoreVertical className="size-4" />
-                        </Button>
-                        {openMenuId === item.id && (
-                          <div
-                            className="bg-popover text-popover-foreground absolute right-0 top-full z-10 mt-1 min-w-[100px] rounded-md border py-1 shadow-md"
-                            role="menu"
-                          >
-                            <button
-                              type="button"
-                              className="hover:bg-accent flex w-full items-center gap-2 px-3 py-2 text-left text-sm"
-                              onClick={() => handleEdit(item)}
-                            >
-                              <Pencil className="size-3.5" />
-                              编辑
-                            </button>
-                            <button
-                              type="button"
-                              className="hover:bg-accent text-destructive flex w-full items-center gap-2 px-3 py-2 text-left text-sm"
-                              onClick={() => handleForget(item.id)}
-                            >
-                              <Trash2 className="size-3.5" />
-                              忘记
-                            </button>
-                          </div>
-                        )}
-                      </div>
-                    </div>
-                  </>
-                )}
-              </div>
-            ))}
+            <MemorySection
+              title="当前会话相关"
+              list={sessionMemories}
+              expandByDefault={true}
+              renderItem={renderCard}
+              emptyMessage="暂无记忆"
+            />
+
+            <MemorySection
+              title={
+                isSearchMode
+                  ? `搜索记忆（${searchResults.length} 条）`
+                  : "所有记忆"
+              }
+              list={paginatedList}
+              pagination={
+                totalPages > 1
+                  ? {
+                      page: currentPage,
+                      totalPages,
+                      onPrev: () =>
+                        setCurrentPage((p) => Math.max(1, p - 1)),
+                      onNext: () =>
+                        setCurrentPage((p) =>
+                          Math.min(totalPages, p + 1)
+                        ),
+                    }
+                  : null
+              }
+              expandByDefault={false}
+              renderItem={renderCard}
+              emptyMessage={isSearchMode ? "无匹配记忆" : "暂无记忆"}
+              onExpand={() => {
+                setAllPage(1);
+                setSearchPage(1);
+              }}
+              search={{
+                value: searchQuery,
+                onChange: (v) => {
+                  setSearchQuery(v);
+                  setSearchPage(1);
+                },
+                placeholder: "自然语言搜索记忆…",
+              }}
+              totalCount={allMemories.length}
+              pageSize={PAGE_SIZE}
+            />
           </div>
         </ScrollArea>
       </SheetContent>
