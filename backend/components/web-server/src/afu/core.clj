@@ -1,14 +1,15 @@
 (ns afu.core
   "Web 服务入口：启动 Jetty，挂载 afu.handler/app；可选启动 nREPL 供边运行边连。"
-  (:require [afu.handler :as handler]
-            [afu.config :as config]
+  (:require [afu.config :as config]
             [afu.db :as db]
+            [afu.embedding :as embedding]
+            [afu.handler :as handler]
             [afu.nrepl-middleware :as nrepl-mw]
-            [clojure.java.io :as io]
-            [conversation :as conversation]
-            [agentmanager :as agentmanager]
             [agent.tools.execute-clojure.sci-sandbox.k-line-store :as k-line-store]
             [agent.tools.execute-clojure.sci-sandbox.stock-list-store :as stock-list-store]
+            [agentmanager :as agentmanager]
+            [clojure.java.io :as io]
+            [conversation :as conversation]
             [memory-store :as ms]
             [resource-store :as res]
             [ring.adapter.jetty :as jetty]))
@@ -25,8 +26,15 @@
   ([opts]
    (io/make-parents "data/resources.db")
    (handler/set-resource-store! (res/->sqlite-store "jdbc:sqlite:data/resources.db"))
-   ;; Memory store：需 VEC_EXTENSION_PATH + embed-fn。有 embed 实现后在此调用：
-   ;; (handler/set-memory-store! (ms/->memory-store (config/memory-store-opts your-embed-fn)))
+   ;; Memory store：需 sqlite-vec 扩展，embed-fn 调用 LM Studio /embeddings
+   (let [vec-path (config/vec-extension-path)
+         vec-ok?  (when vec-path
+                    (some #(.exists (io/file (str vec-path %)))
+                          [".dylib" ".so" ".dll"]))]
+     (if vec-ok?
+       (handler/set-memory-store!
+        (ms/->memory-store (config/memory-store-opts (embedding/->embed-fn))))
+       (println "[Memory] sqlite-vec 未安装或未找到，记忆功能不可用。运行 clj -M:setup 安装扩展。")))
    (io/make-parents (str (config/memory-base-dir) "/.keep"))
    (agentmanager/ensure-schema! db/conn)
    (conversation/ensure-schema! db/conn)

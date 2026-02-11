@@ -59,110 +59,113 @@
     (is (contains? *store* :embed-fn))))
 
 (deftest memory-ensure
-  (testing "->memory 为 key 创建/打开库"
-    (is (= :agent-1-user-1 (ms/->memory *store* :agent-1-user-1)))
-    (is (= :other-key (ms/->memory *store* :other-key)))))
+  (testing "->memory 为 key 创建/打开库，返回含 :store :key 的 memory 对象"
+    (is (= :agent-1-user-1 (:key (ms/->memory *store* :agent-1-user-1))))
+    (is (= :other-key (:key (ms/->memory *store* :other-key))))))
 
 (deftest remember-returns-id
   (testing "remember! 返回 content-id"
-    (ms/->memory *store* :test)
-    (let [id (ms/remember! *store* :test "用户喜欢 Clojure")]
+    (let [mem (ms/->memory *store* :test)
+          id  (ms/remember! mem "用户喜欢 Clojure")]
       (is (string? id))
       (is (re-matches #"[0-9a-f-]{36}" id)))))
 
 (deftest recall-after-remember
   (testing "remember! 后 recall 能取回 content"
-    (ms/->memory *store* :test)
-    (let [id (ms/remember! *store* :test "用户喜欢 Clojure 和 Next.js")]
-      (is (= "用户喜欢 Clojure 和 Next.js" (ms/recall *store* :test id))))))
+    (let [mem (ms/->memory *store* :test)
+          id  (ms/remember! mem "用户喜欢 Clojure 和 Next.js")]
+      (is (= "用户喜欢 Clojure 和 Next.js" (ms/recall mem id))))))
 
 (deftest recall-nonexistent
   (testing "recall 不存在的 content-id 返回 nil"
-    (ms/->memory *store* :test)
-    (is (nil? (ms/recall *store* :test "nonexistent-id")))))
+    (let [mem (ms/->memory *store* :test)]
+      (is (nil? (ms/recall mem "nonexistent-id"))))))
 
 (deftest list-content-empty
   (testing "空库 list-content 返回空列表"
-    (ms/->memory *store* :test)
-    (let [out (ms/list-content *store* :test {:page 1 :page-size 10})]
+    (let [mem (ms/->memory *store* :test)
+          out (ms/list-content mem {:page 1 :page-size 10})]
       (is (= [] (:items out)))
       (is (= 0 (:total-count out))))))
 
 (deftest list-content-with-items
   (testing "有内容时 list-content 无 :q 按时间倒序分页"
-    (ms/->memory *store* :test)
-    (ms/remember! *store* :test "第一条")
-    (ms/remember! *store* :test "第二条")
-    (ms/remember! *store* :test "第三条")
-    (let [out (ms/list-content *store* :test {:page 1 :page-size 2})]
-      (is (= 2 (count (:items out))))
-      (is (= 3 (:total-count out)))
-      (is (= "第三条" (:content (first (:items out)))))
-      (is (= "第二条" (:content (second (:items out))))))))
+    (let [mem (ms/->memory *store* :test)]
+      (ms/remember! mem "第一条")
+      (ms/remember! mem "第二条")
+      (ms/remember! mem "第三条")
+      (let [out (ms/list-content mem {:page 1 :page-size 2})]
+        (is (= 2 (count (:items out))))
+        (is (= 3 (:total-count out)))
+        (is (= "第三条" (:content (first (:items out)))))
+        (is (= "第二条" (:content (second (:items out)))))))))
 
 (deftest list-content-pagination
   (testing "分页 page、page-size 正确"
-    (ms/->memory *store* :test)
-    (dotimes [_ 5] (ms/remember! *store* :test "item"))
-    (let [p1 (ms/list-content *store* :test {:page 1 :page-size 2})
-          p2 (ms/list-content *store* :test {:page 2 :page-size 2})]
-      (is (= 2 (count (:items p1))))
-      (is (= 2 (count (:items p2))))
-      (is (= 5 (:total-count p1)))
-      (is (= 5 (:total-count p2))))))
+    (let [mem (ms/->memory *store* :test)]
+      (dotimes [_ 5] (ms/remember! mem "item"))
+      (let [p1 (ms/list-content mem {:page 1 :page-size 2})
+            p2 (ms/list-content mem {:page 2 :page-size 2})]
+        (is (= 2 (count (:items p1))))
+        (is (= 2 (count (:items p2))))
+        (is (= 5 (:total-count p1)))
+        (is (= 5 (:total-count p2)))))))
 
 (deftest list-content-with-query
   (testing "list-content :q 向量搜索返回相似结果"
-    (ms/->memory *store* :test)
-    (ms/remember! *store* :test "用户喜欢 Clojure 编程")
-    (ms/remember! *store* :test "今天是晴天")
-    (ms/remember! *store* :test "Clojure 是函数式语言")
-    (let [out (ms/list-content *store* :test {:q "Clojure" :page 1 :page-size 10})]
-      (is (<= 1 (:total-count out)))
-      (is (<= 1 (count (:items out))) (str "向量搜索应返回结果，out=" out))
-      (is (some #(str/includes? (:content %) "Clojure") (:items out))
-          (str "结果应含 Clojure，items=" (mapv :content (:items out)))))))
+    (let [mem (ms/->memory *store* :test)]
+      (ms/remember! mem "用户喜欢 Clojure 编程")
+      (ms/remember! mem "今天是晴天")
+      (ms/remember! mem "Clojure 是函数式语言")
+      (let [out (ms/list-content mem {:q "Clojure" :page 1 :page-size 10})]
+        (is (<= 1 (:total-count out)))
+        (is (<= 1 (count (:items out))) (str "向量搜索应返回结果，out=" out))
+        (is (some #(str/includes? (:content %) "Clojure") (:items out))
+            (str "结果应含 Clojure，items=" (mapv :content (:items out))))))))
 
 (deftest change-updates-content
   (testing "change! 更新 content 后 recall 返回新内容"
-    (ms/->memory *store* :test)
-    (let [id (ms/remember! *store* :test "原始内容")]
-      (ms/change! *store* :test id "更新后的内容")
-      (is (= "更新后的内容" (ms/recall *store* :test id))))))
+    (let [mem (ms/->memory *store* :test)
+          id  (ms/remember! mem "原始内容")]
+      (ms/change! mem id "更新后的内容")
+      (is (= "更新后的内容" (ms/recall mem id))))))
 
 (deftest forget-removes-content
   (testing "forget! 后 recall 返回 nil"
-    (ms/->memory *store* :test)
-    (let [id (ms/remember! *store* :test "将被删除")]
-      (ms/forget! *store* :test id)
-      (is (nil? (ms/recall *store* :test id))))))
+    (let [mem (ms/->memory *store* :test)
+          id  (ms/remember! mem "将被删除")]
+      (ms/forget! mem id)
+      (is (nil? (ms/recall mem id))))))
 
 (deftest forget-list-excludes-forgotten
   (testing "forget! 后 list-content 不再包含该项"
-    (ms/->memory *store* :test)
-    (let [id (ms/remember! *store* :test "唯一一条")]
-      (ms/forget! *store* :test id)
-      (let [out (ms/list-content *store* :test {:page 1 :page-size 10})]
+    (let [mem (ms/->memory *store* :test)
+          id  (ms/remember! mem "唯一一条")]
+      (ms/forget! mem id)
+      (let [out (ms/list-content mem {:page 1 :page-size 10})]
         (is (= 0 (count (:items out))))
         (is (= 0 (:total-count out)))))))
 
 (deftest key-isolation
   (testing "不同 key 的数据彼此隔离"
-    (ms/->memory *store* :key-a)
-    (ms/->memory *store* :key-b)
-    (let [id-a (ms/remember! *store* :key-a "A 的数据")]
-      (is (= "A 的数据" (ms/recall *store* :key-a id-a)))
-      (is (nil? (ms/recall *store* :key-b id-a))))
-    (let [id-b (ms/remember! *store* :key-b "B 的数据")]
-      (is (= "B 的数据" (ms/recall *store* :key-b id-b)))
-      (is (nil? (ms/recall *store* :key-a id-b))))))
+    (let [mem-a (ms/->memory *store* :key-a)
+          mem-b (ms/->memory *store* :key-b)
+          id-a  (ms/remember! mem-a "A 的数据")]
+      (is (= "A 的数据" (ms/recall mem-a id-a)))
+      (is (nil? (ms/recall mem-b id-a))))
+    (let [mem-a (ms/->memory *store* :key-a)
+          mem-b (ms/->memory *store* :key-b)
+          id-b  (ms/remember! mem-b "B 的数据")]
+      (is (= "B 的数据" (ms/recall mem-b id-b)))
+      (is (nil? (ms/recall mem-a id-b))))))
 
 (deftest remember-requires-vec-path
   (testing "无 vec-extension-path 时 remember! 抛出"
     (let [store-no-vec (ms/->memory-store {:base-dir *base-dir*
-                                          :embed-fn embed-fn})]
+                                          :embed-fn embed-fn})
+          mem         (ms/->memory store-no-vec :test)]
       (try
-        (ms/remember! store-no-vec :test "x")
+        (ms/remember! mem "x")
         (is false "should have thrown")
         (catch Exception e
           (is (re-find #"vec-extension-path" (str (ex-message e)))))))))
@@ -170,13 +173,13 @@
 (deftest embed-fn-wrong-dimension
   (testing "embed-fn 返回维度不符时 remember! 抛出"
     (let [bad-embed-fn (fn [_] [0.1 0.2])
-          store-bad (ms/->memory-store {:base-dir *base-dir*
-                                        :embed-fn bad-embed-fn
-                                        :vec-extension-path *vec-path*
-                                        :embed-dim embed-dim})]
-      (ms/->memory store-bad :test)
+          store-bad   (ms/->memory-store {:base-dir *base-dir*
+                                          :embed-fn bad-embed-fn
+                                          :vec-extension-path *vec-path*
+                                          :embed-dim embed-dim})
+          mem         (ms/->memory store-bad :test)]
       (try
-        (ms/remember! store-bad :test "x")
+        (ms/remember! mem "x")
         (is false "should have thrown")
         (catch Exception e
           (is (re-find #"embed-dim" (str (ex-message e)))))))))
@@ -184,9 +187,10 @@
 (deftest list-content-search-requires-vec
   (testing "有 :q 无 vec-extension-path 时 list-content 抛出"
     (let [store-no-vec (ms/->memory-store {:base-dir *base-dir*
-                                           :embed-fn embed-fn})]
+                                           :embed-fn embed-fn})
+          mem         (ms/->memory store-no-vec :test)]
       (try
-        (ms/list-content store-no-vec :test {:q "x"})
+        (ms/list-content mem {:q "x"})
         (is false "should have thrown")
         (catch Exception e
           (is (or (re-find #"vec-extension-path" (str (ex-message e)))

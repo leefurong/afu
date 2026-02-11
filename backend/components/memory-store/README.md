@@ -4,13 +4,10 @@
 
 ## 安装 sqlite-vec
 
-1. **推荐**：在项目 backend 目录下运行安装脚本（自动识别平台并下载）：
-   ```bash
-   backend/scripts/setup-vec.sh
-   ```
-   扩展会安装到 `backend/extensions/vec0.dylib`（或 .so/.dll）。
-
-2. 运行测试：在 `backend/components/memory-store` 目录下执行 `clj -M:test`（deps.edn 中已配置 `VEC_EXTENSION_PATH=../../extensions/vec0`）
+1. **推荐**：在 backend 目录执行 `clj -M:setup`（或直接运行 `scripts/setup-vec.sh`），自动识别平台并下载。
+2. 扩展会安装到 `backend/extensions/vec0.dylib`（或 .so/.dll）。
+3. 启动 web-server 时，`deps.edn :web-server` 已配置默认 `-DVEC_EXTENSION_PATH=extensions/vec0`，无需手动设置。
+4. 运行测试：在 `backend/components/memory-store` 下执行 `clj -M:test`（其 deps.edn 已配置路径）。
 
 ## API
 

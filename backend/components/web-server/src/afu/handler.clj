@@ -1,7 +1,9 @@
 (ns afu.handler
   (:require [clojure.string :as str]
+            [memory-store :as ms]
             [reitit.ring :as ring]
             [ring.middleware.json :as ring-json]
+            [ring.middleware.params :as ring-params]
             [ring.middleware.cors :as cors]
             [ring.util.io :as ring-io]
             [clojure.core.async :as a]
@@ -29,6 +31,14 @@
 (def ^:private memory-store (atom nil))
 (defn set-memory-store! [store] (reset! memory-store store))
 (defn get-memory-store [] @memory-store)
+
+(defn- resolve-user-id
+  "从 request 推导 user-id。当前返回 \"default\"；后续可从 JWT/session 解析。"
+  [_request]
+  "default")
+
+(defn- memory-key-for [request]
+  (keyword (str "agent-" (str fixed-agent-id) "-user-" (resolve-user-id request))))
 
 ;; ---------------------------------------------------------------------------
 ;; 登录逻辑：调用 account 组件做真实校验
@@ -378,88 +388,87 @@
   (switch-branch-handler request 1))
 
 ;; ---------------------------------------------------------------------------
-;; Memory API（当前返回假数据，后续接入 memory-store）
+;; Memory API（接入 memory-store，按 agent-id + user-id 隔离）
 ;; ---------------------------------------------------------------------------
 
-(def ^:private fake-memories
-  "假数据，用于打通 UI -> handler 路径。"
-  (mapv (fn [[id content mins-ago]]
-          {:id id
-           :content content
-           :created_at (str (java.time.Instant/ofEpochMilli
-                            (- (System/currentTimeMillis) (* mins-ago 60 1000))))})
-        [["1" "用户正在开发一个以客户为中心的智能体项目，以智能客户代理和真人居间团队相结合的商业模式为主，计划以高科技智能背景为基础，提供软件开发、采购代理、咨询等多项服务。" 5]
-         ["2" "用户偏好使用 Next.js 与 TypeScript 进行前端开发，后端使用 Clojure。" (* 2 60)]
-         ["3" "用户关注股票数据与均线金叉等信号验证。" (* 24 60)]
-         ["4" "用户常使用 Cursor 与 Calva 进行开发。" (* 2 24 60)]
-         ["5" "用户对无限记忆与长程上下文能力有需求。" (* 3 24 60)]
-         ["6" "项目代号阿福，目标是打造能听懂话、能跑代码的智能体。" (* 4 24 60)]
-         ["7" "技术栈包含 SCI 沙盒、Datomic、resource-store。" (* 5 24 60)]
-         ["8" "对话与消息正文存 resource-store，Datomic 只存结构。" (* 6 24 60)]
-         ["9" "用户希望记忆支持向量检索与自然语言搜索。" (* 7 24 60)]
-         ["10" "黄伟伟要的全套功能可通过聊天窗口与 SCI 函数实现。" (* 8 24 60)]
-         ["11" "短信通知可附带通向聊天线索的 URL。" (* 9 24 60)]
-         ["12" "定时任务让用户设定未来发生的事件。" (* 10 24 60)]
-         ["13" "福聊中话题独立但信息互通。" (* 11 24 60)]
-         ["14" "后端使用 reitit 做路由，next.jdbc 与 honey.sql。" (* 12 24 60)]
-         ["15" "前端使用 Shadcn UI 与 Tailwind。" (* 13 24 60)]
-         ["16" "消息可编辑重发，支持从根分叉或接在选中消息后。" (* 14 24 60)]
-         ["17" "K 线数据有缓存与增量更新逻辑。" (* 15 24 60)]
-         ["18" "tushare 用于获取股票行情。" (* 16 24 60)]
-         ["19" "Agent 可主动发言，基于定时任务。" (* 17 24 60)]
-         ["20" "Code is Data 为第一性原理。" (* 18 24 60)]]))
-
-(defn- fake-memory-text-match? [content q]
-  (let [q (str/trim q)
-        terms (filter seq (str/split q #"\s+"))]
-    (or (empty? terms)
-        (every? #(str/includes? content %) terms))))
+(defn- memory-unavailable []
+  {:status 503
+   :body   {"error" "Memory 服务不可用，请设置 VEC_EXTENSION_PATH 并确保 sqlite-vec 已安装"}})
 
 (defn list-memory-handler
-  "GET /api/memory：返回记忆列表。query: q(可选), page(默认1), page-size(默认10)。
-   当前返回假数据。"
+  "GET /api/memory：返回记忆列表。query: q(可选，向量搜索), page(默认1), page-size(默认10)。
+   按 agent-id + user-id 隔离。"
   [request]
-  (let [q         (get-in request [:query-params "q"])
-        page      (max 1 (Long/parseLong (str (get-in request [:query-params "page"] "1"))))
-        page-size (max 1 (min 100 (Long/parseLong (str (get-in request [:query-params "page-size"] "10")))))
-        filtered  (if (str/blank? q)
-                    fake-memories
-                    (filterv #(fake-memory-text-match? (:content %) q) fake-memories))
-        sorted    (sort-by :created_at #(compare %2 %1) filtered)
-        total     (count sorted)
-        offset    (* (dec page) page-size)
-        items     (take page-size (drop offset sorted))]
-    {:status 200
-     :body   {"items"       (mapv (fn [m] {"id" (:id m) "content" (:content m) "created_at" (:created_at m)}) items)
-              "total_count" total}}))
+  (if-let [store (get-memory-store)]
+    (try
+      (let [mem      (ms/->memory store (memory-key-for request))
+            params   (or (:query-params request) {})
+            q        (when-let [v (or (get params "q") (get params :q))] (str/trim (str v)))
+            page     (max 1 (Long/parseLong (str (or (get params "page") (get params :page) "1"))))
+            page-size (max 1 (min 100 (Long/parseLong (str (or (get params "page-size") (get params :page-size) "10")))))
+            opts     (cond-> {:page page :page-size page-size}
+                       (not (str/blank? q)) (assoc :q q))
+            result   (ms/list-content mem opts)]
+        {:status 200
+         :body   {"items"       (mapv (fn [m]
+                                        {"id"         (:id m)
+                                         "content"    (:content m)
+                                         "created_at" (when-let [t (:created-at m)]
+                                                        (str (java.time.Instant/ofEpochMilli (long t))))})
+                                 (:items result))
+                  "total_count" (:total-count result)}})
+      (catch Throwable t
+        {:status 500 :body {"error" (str (.getMessage t))}}))
+    (memory-unavailable)))
 
 (defn add-memory-handler
-  "POST /api/memory：新增记忆。body: {:content \"...\"}。当前返回假 id。"
+  "POST /api/memory：新增记忆。body: {:content \"...\"}。返回 {:id \"...\"}。"
   [request]
-  (let [body   (get request :body {})
-        content (or (get body :content) (get body "content") "")]
-    (if (str/blank? content)
-      {:status 400 :body {"error" "content is required"}}
-      {:status 200
-       :body   {"id" (str (random-uuid))}})))
+  (if-let [store (get-memory-store)]
+    (let [body   (get request :body {})
+          content (or (get body :content) (get body "content") "")]
+      (if (str/blank? content)
+        {:status 400 :body {"error" "content is required"}}
+        (try
+          (let [mem (ms/->memory store (memory-key-for request))]
+            {:status 200 :body {"id" (ms/remember! mem content)}})
+          (catch Throwable t
+            {:status 500 :body {"error" (str (.getMessage t))}}))))
+    (memory-unavailable)))
 
 (defn update-memory-handler
-  "PUT /api/memory/:id：更新记忆。body: {:content \"...\"}。当前假实现，直接返回成功。"
+  "PUT /api/memory/:id：更新记忆。body: {:content \"...\"}。"
   [request]
-  (let [_ (get-in request [:path-params :id])
-        body    (get request :body {})
-        content (or (get body :content) (get body "content") "")]
-    (if (str/blank? content)
-      {:status 400 :body {"error" "content is required"}}
-      {:status 200
-       :body   {"ok" true}})))
+  (if-let [store (get-memory-store)]
+    (let [id-str  (get-in request [:path-params :id])
+          body    (get request :body {})
+          content (or (get body :content) (get body "content") "")]
+      (if (str/blank? content)
+        {:status 400 :body {"error" "content is required"}}
+        (if (str/blank? id-str)
+          {:status 400 :body {"error" "id is required"}}
+          (try
+            (let [mem (ms/->memory store (memory-key-for request))]
+              (ms/change! mem id-str content))
+            {:status 200 :body {"ok" true}}
+            (catch Throwable t
+              {:status 500 :body {"error" (str (.getMessage t))}})))))
+    (memory-unavailable)))
 
 (defn delete-memory-handler
-  "DELETE /api/memory/:id：删除记忆。当前假实现，直接返回成功。"
+  "DELETE /api/memory/:id：删除记忆。"
   [request]
-  (let [_ (get-in request [:path-params :id])]
-    {:status 200
-     :body   {"ok" true}}))
+  (if-let [store (get-memory-store)]
+    (let [id-str (get-in request [:path-params :id])]
+      (if (str/blank? id-str)
+        {:status 400 :body {"error" "id is required"}}
+        (try
+          (let [mem (ms/->memory store (memory-key-for request))]
+            (ms/forget! mem id-str))
+          {:status 200 :body {"ok" true}}
+          (catch Throwable t
+            {:status 500 :body {"error" (str (.getMessage t))}}))))
+    (memory-unavailable)))
 
 ;; ---------------------------------------------------------------------------
 ;; 路由与 Ring Handler
@@ -536,6 +545,7 @@
    用于挂载到 Jetty 等服务器，处理 POST /api/login、POST /api/chat（流式）。"
   []
   (-> (ring-handler)
+      ring-params/wrap-params
       wrap-json
       wrap-cors-policy
       wrap-catch-response))
