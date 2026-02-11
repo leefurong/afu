@@ -552,9 +552,9 @@ export default function ChatPage() {
   const hasAny = grouped.today.length + grouped.yesterday.length + grouped.within7.length > 0;
 
   return (
-    <main className="flex min-h-screen flex-col bg-gradient-to-b from-background via-background to-muted/20">
-      <div className="container mx-auto flex max-w-2xl flex-1 flex-col gap-4 p-4">
-        <Card className="flex flex-1 flex-col border-border/60 bg-card/95 shadow-sm">
+    <main className="flex h-screen flex-col overflow-hidden bg-gradient-to-b from-background via-background to-muted/20">
+      <div className="container mx-auto flex min-h-0 max-w-2xl flex-1 flex-col gap-4 p-4">
+        <Card className="flex min-h-0 flex-1 flex-col border-border/60 bg-card/95 shadow-sm">
           <CardHeader
             className={cn(
               "sticky top-0 z-10 shrink-0 border-b bg-card/95 backdrop-blur-[6px] px-4 transition-[padding] duration-200",
@@ -650,7 +650,7 @@ export default function ChatPage() {
             </div>
           </CardHeader>
           <CardContent className="flex min-h-0 flex-1 flex-col gap-4 p-0">
-            <ScrollArea className="flex-1 px-4">
+            <ScrollArea className="min-h-0 flex-1 px-4">
               <div className="flex flex-col gap-4 py-4">
                 {messages.length === 0 && !streamingContent && streamSteps.length === 0 && (
                   <p className="text-muted-foreground text-center text-sm">
