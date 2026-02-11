@@ -23,6 +23,7 @@ import {
   PanelLeft,
   MoreHorizontal,
   X,
+  Brain,
 } from "lucide-react";
 import { MessageToolBar } from "@/components/message-tool-bar";
 import { streamChat } from "@/services/chat";
@@ -355,6 +356,7 @@ export default function ChatPage() {
   const [targetParentId, setTargetParentId] = useState<string | null>(null);
   /** 编辑第一条消息时为 true，发送时走「从根分叉」逻辑。 */
   const [branchFromRoot, setBranchFromRoot] = useState(false);
+  const [memoryOpen, setMemoryOpen] = useState(false);
 
   const isLoading = status === "streaming";
 
@@ -850,9 +852,22 @@ export default function ChatPage() {
                 </Button>
               </div>
             )}
+            <div className="flex shrink-0 flex-col border-t">
+              <div className="flex items-center gap-1 px-4 py-2">
+                <Button
+                  type="button"
+                  variant="ghost"
+                  size="icon"
+                  className="h-8 w-8 text-muted-foreground hover:text-foreground"
+                  onClick={() => setMemoryOpen(true)}
+                  aria-label="记忆"
+                >
+                  <Brain className="size-4" />
+                </Button>
+              </div>
             <form
               onSubmit={handleSubmit}
-              className="flex shrink-0 gap-2 border-t p-4"
+              className="flex gap-2 p-4 pt-0"
             >
               <textarea
                 value={input}
@@ -882,6 +897,14 @@ export default function ChatPage() {
                 )}
               </Button>
             </form>
+            </div>
+            <Sheet open={memoryOpen} onOpenChange={setMemoryOpen}>
+              <SheetContent side="right" className="sm:max-w-md">
+                <SheetHeader>
+                  <SheetTitle>记忆</SheetTitle>
+                </SheetHeader>
+              </SheetContent>
+            </Sheet>
           </CardContent>
         </Card>
       </div>
