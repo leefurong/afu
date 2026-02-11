@@ -15,4 +15,5 @@
         afu/agent         {:local/root "../agent"}
         afu/account       {:local/root "../account"}
         afu/database      {:local/root "../database"}
-        afu/resource-store {:local/root "../resource-store"}}}
+        afu/resource-store {:local/root "../resource-store"}
+        afu/memory-store   {:local/root "../memory-store"}}}

@@ -1,0 +1,9 @@
+{:paths ["src" "test"]
+ :deps {com.github.seancorfield/next.jdbc {:mvn/version "1.3.909"}
+        org.xerial/sqlite-jdbc            {:mvn/version "3.46.1.0"}
+        cheshire/cheshire                 {:mvn/version "5.13.0"}}
+
+ :aliases {:test {:extra-deps {lambdaisland/kaocha {:mvn/version "1.91.1392"}}
+                  :main-opts ["-m" "kaocha.runner"]
+                  ;; 从 memory-store 目录运行 clj -M:test 时，extensions 在 ../../extensions/vec0
+                  :jvm-opts ["-DVEC_EXTENSION_PATH=../../extensions/vec0"]}}}

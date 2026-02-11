@@ -24,6 +24,11 @@
 (defn set-resource-store! [store] (reset! resource-store store))
 (defn- get-resource-store [] @resource-store)
 
+;; Memory store 由 afu.core 启动时注入，供记忆 API 使用。需要 VEC_EXTENSION_PATH + embed-fn。
+(def ^:private memory-store (atom nil))
+(defn set-memory-store! [store] (reset! memory-store store))
+(defn get-memory-store [] @memory-store)
+
 ;; ---------------------------------------------------------------------------
 ;; 登录逻辑：调用 account 组件做真实校验
 ;; ---------------------------------------------------------------------------

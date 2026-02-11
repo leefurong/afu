@@ -1,0 +1,2 @@
+#kaocha/v1 {}
+;; 先运行 backend/scripts/setup-vec.sh 安装扩展，然后 clj -M:test

@@ -1,6 +1,7 @@
 (ns afu.core
   "Web 服务入口：启动 Jetty，挂载 afu.handler/app；可选启动 nREPL 供边运行边连。"
   (:require [afu.handler :as handler]
+            [afu.config :as config]
             [afu.db :as db]
             [afu.nrepl-middleware :as nrepl-mw]
             [clojure.java.io :as io]
@@ -8,6 +9,7 @@
             [agentmanager :as agentmanager]
             [agent.tools.execute-clojure.sci-sandbox.k-line-store :as k-line-store]
             [agent.tools.execute-clojure.sci-sandbox.stock-list-store :as stock-list-store]
+            [memory-store :as ms]
             [resource-store :as res]
             [ring.adapter.jetty :as jetty]))
 
@@ -23,6 +25,9 @@
   ([opts]
    (io/make-parents "data/resources.db")
    (handler/set-resource-store! (res/->sqlite-store "jdbc:sqlite:data/resources.db"))
+   ;; Memory store：需 VEC_EXTENSION_PATH + embed-fn。有 embed 实现后在此调用：
+   ;; (handler/set-memory-store! (ms/->memory-store (config/memory-store-opts your-embed-fn)))
+   (io/make-parents (str (config/memory-base-dir) "/.keep"))
    (agentmanager/ensure-schema! db/conn)
    (conversation/ensure-schema! db/conn)
    (stock-list-store/ensure-schema! db/conn)
