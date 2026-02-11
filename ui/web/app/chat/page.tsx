@@ -13,6 +13,7 @@ import {
   SheetTitle,
   SheetTrigger,
 } from "@/components/ui/sheet";
+import { ManageMemorySheet } from "@/components/manage-memory-sheet";
 import { cn } from "@/lib/utils";
 import {
   Send,
@@ -898,13 +899,7 @@ export default function ChatPage() {
               </Button>
             </form>
             </div>
-            <Sheet open={memoryOpen} onOpenChange={setMemoryOpen}>
-              <SheetContent side="right" className="sm:max-w-md">
-                <SheetHeader>
-                  <SheetTitle>记忆</SheetTitle>
-                </SheetHeader>
-              </SheetContent>
-            </Sheet>
+            <ManageMemorySheet open={memoryOpen} onOpenChange={setMemoryOpen} />
           </CardContent>
         </Card>
       </div>
