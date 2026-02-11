@@ -2,6 +2,8 @@
  * 流式聊天：POST 到后端，消费 NDJSON 流（thinking / content / done / tool_call / tool_result），通过回调更新 UI。
  */
 
+import { getToken } from "@/services/auth";
+
 export type ToolCallPayload = { name: string; code: string };
 export type ToolResultPayload = unknown; // {:ok v} | {:error "..."} from backend
 
@@ -47,11 +49,15 @@ export async function streamChat(
   const { onThinking, onContent, onToolCall, onToolResult, onDone, onError } =
     callbacks;
 
+  const headers: HeadersInit = { "Content-Type": "application/json" };
+  const token = getToken();
+  if (token) (headers as Record<string, string>)["Authorization"] = `Bearer ${token}`;
+
   let res: Response;
   try {
     res = await fetch(apiUrl, {
       method: "POST",
-      headers: { "Content-Type": "application/json" },
+      headers,
       body: JSON.stringify(body),
     });
   } catch (e) {

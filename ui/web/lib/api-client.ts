@@ -1,8 +1,13 @@
+import { getToken } from "@/services/auth";
+
 const getBaseUrl = () =>
   process.env.NEXT_PUBLIC_API_URL ?? "http://localhost:4000";
 
-const defaultHeaders: HeadersInit = {
-  "Content-Type": "application/json",
+const defaultHeaders = (): HeadersInit => {
+  const h: HeadersInit = { "Content-Type": "application/json" };
+  const token = getToken();
+  if (token) (h as Record<string, string>)["Authorization"] = `Bearer ${token}`;
+  return h;
 };
 
 export class ApiError extends Error {
@@ -46,7 +51,7 @@ async function request<T>(
   }
   const res = await fetch(url.toString(), {
     ...init,
-    headers: { ...defaultHeaders, ...init.headers },
+    headers: { ...defaultHeaders(), ...init.headers },
   });
   return handleResponse<T>(res);
 }

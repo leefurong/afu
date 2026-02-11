@@ -33,7 +33,7 @@
   "验证身份。如果成功返回用户信息，失败返回 nil"
   [db username password]
   (when-let [user (d/pull db
-                          '[:db/id :account/password-hash :account/username]
+                          '[:db/id :account/id :account/password-hash :account/username]
                           [:account/username username])]
     (when (and user
                (hashers/check password (:account/password-hash user)))

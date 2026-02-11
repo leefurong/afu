@@ -1,5 +1,6 @@
 (ns afu.handler
-  (:require [clojure.string :as str]
+  (:require [afu.auth :as auth]
+            [clojure.string :as str]
             [memory-store :as ms]
             [reitit.ring :as ring]
             [ring.middleware.json :as ring-json]
@@ -32,10 +33,24 @@
 (defn set-memory-store! [store] (reset! memory-store store))
 (defn get-memory-store [] @memory-store)
 
+(def ^:private default-user-id #uuid "00000000-0000-0000-0000-000000000000")
+
 (defn- resolve-user-id
-  "从 request 推导 user-id。当前返回 \"default\"；后续可从 JWT/session 解析。"
-  [_request]
-  "default")
+  "从 request 的 Authorization: Bearer <token> 解析 user-id。有效 JWT 返回 (str account/id)，否则 \"default\"。"
+  [request]
+  (if-let [auth-header (get-in request [:headers "authorization"])]
+    (if-let [token (some-> auth-header (str/split #"\s+") second)]
+      (or (get (auth/unsign-token token) :user-id) "default")
+      "default")
+    "default"))
+
+(defn- resolve-user-uuid
+  "与 resolve-user-id 相同来源，但返回 UUID（供 conversation 用）。无 token 或无效时返回 default-user-id。"
+  [request]
+  (let [s (resolve-user-id request)]
+    (if (= "default" s)
+      default-user-id
+      (try (java.util.UUID/fromString s) (catch Exception _ default-user-id)))))
 
 (defn- memory-key-for [request]
   (keyword (str "agent-" (str fixed-agent-id) "-user-" (resolve-user-id request))))
@@ -47,7 +62,7 @@
 (defn login-handler
   "处理 POST /api/login。
    从请求 Body 解析 JSON {:username \"...\" :password \"...\"}，
-   使用 account/authenticate 校验，成功返回 200 + token，失败返回 401。"
+   使用 account/authenticate 校验，成功返回 200 + JWT token，失败返回 401。"
   [request]
   (let [body (get request :body {})
         username (get body :username)
@@ -55,10 +70,12 @@
         user (when (and (string? username) (string? password))
                (account/authenticate (db/db) username password))]
     (if user
-      {:status 200
-       :body   {:token   "fake-jwt-token-123456"
-                :message "Login successful"
-                :user    (select-keys user [:account/username :account/id])}}
+      (let [user-id (:account/id user)
+            token   (auth/sign-token user-id (:account/username user))]
+        {:status 200
+         :body   {:token   token
+                  :message "Login successful"
+                  :user    (select-keys user [:account/username :account/id])}})
       {:status 401
        :body   {:error "Invalid credentials"}})))
 
@@ -233,7 +250,8 @@
         body       (get request :body {})
         user-text  (last-user-text body)
         _          (println "[chat] request body keys:" (keys body) "user-text len:" (count (str user-text)) "conv-id from body?" (boolean (resolve-conversation-id body)))
-        conv-id    (or (resolve-conversation-id body) (conversation/create! conn (get-resource-store)))
+        conv-id    (or (resolve-conversation-id body)
+                      (conversation/create! conn (get-resource-store) (resolve-user-uuid request)))
         prev-msg-id (resolve-prev-message-id body)
         branch-from-root? (resolve-branch-from-root body)
         ;; 当前分支：branch_from_root 时从根分叉；否则 prev_message_id；否则由 root + selected-next-id 推出
@@ -302,17 +320,16 @@
         (str (java.time.Instant/ofEpochMilli (long millis)))))))
 
 (defn list-conversations-handler
-  "GET /api/conversations：返回近期会话列表。body 仅用字符串 key，避免 ring-json 序列化抛错导致 Response nil。"
-  [_request]
+  "GET /api/conversations：返回近期会话列表，按当前用户过滤。"
+  [request]
   (try
     (let [conn  db/conn
-          items (conversation/list-recent conn (get-resource-store))
-          ;; 仅字符串 key + 字符串/nil 值，保证 cheshire 序列化不抛错
-          body  (mapv (fn [m]
-                       {"id"         (str (:id m))
-                        "title"      (str (or (:title m) ""))
-                        "updated_at" (or (temporal-to-iso-str (:updated_at m)) nil)})
-                     items)]
+          items (conversation/list-recent conn (get-resource-store) (resolve-user-uuid request))
+          body     (mapv (fn [m]
+                           {"id"         (str (:id m))
+                            "title"      (str (or (:title m) ""))
+                            "updated_at" (or (temporal-to-iso-str (:updated_at m)) nil)})
+                         items)]
       {:status 200
        :body   body})
     (catch Throwable t
@@ -320,66 +337,83 @@
 
 (defn get-conversation-messages-handler
   "GET /api/conversations/:id/messages：返回该会话当前分支消息列表。
-   当前分支由 root + 各 message 的 selected-next-id 推出，统一经 get-current-head。"
+   当前分支由 root + 各 message 的 selected-next-id 推出，统一经 get-current-head。
+   校验会话归属：有 user-id 的须匹配当前用户；无 user-id（旧数据）仅 default 用户可访问。"
   [request]
-  (let [conn    db/conn
-        id-str  (get-in request [:path-params :id])
-        raw?    (get-in request [:query-params "raw"])
-        conv-id (when id-str
-                  (try (java.util.UUID/fromString id-str) (catch Exception _ nil)))]
+  (let [conn     db/conn
+        id-str   (get-in request [:path-params :id])
+        raw?     (get-in request [:query-params "raw"])
+        conv-id  (when id-str (try (java.util.UUID/fromString id-str) (catch Exception _ nil)))
+        user-id  (resolve-user-uuid request)]
     (if-not conv-id
-      {:status 400 :body {:error "Invalid conversation id"}}
-      (let [head (conversation/get-current-head conn conv-id)
-            msgs (conversation/get-messages conn conv-id head (get-resource-store))]
-        {:status 200
-         :body   (if raw?
-                   (mapv (fn [m] (update m :id str)) msgs)
-                   (mapv (fn [m]
-                           (cond-> {:id      (str (:id m))
-                                    :role    (get m :role "")
-                                    :content (get m :content "")
-                                    :can_left (boolean (get m :can-left?))
-                                    :can_right (boolean (get m :can-right?))
-                                    :sibling_index (get m :sibling-index 1)
-                                    :sibling_total (get m :sibling-total 1)}
-                             (= (get m :role "") "tool")
-                             (assoc :tool_call_id (get m :tool_call_id ""))
-                             (and (= (get m :role "") "assistant") (seq (get m :tool_calls)))
-                             (assoc :tool_calls (get m :tool_calls))))
-                         msgs))}))))
+      {:status 400 :body {"error" "Invalid conversation id"}}
+      (let [conv-owner    (conversation/get-conversation-user-id conn conv-id)
+            ;; 允许：本人会话；或归属 default/nil 的旧数据（迁移兼容，已登录用户可访问）"
+            allowed?      (or (= conv-owner user-id)
+                              (nil? conv-owner)
+                              (= conv-owner default-user-id))]
+        (if-not allowed?
+          {:status 403 :body {"error" "Forbidden"}}
+          (let [head (conversation/get-current-head conn conv-id)
+                msgs (conversation/get-messages conn conv-id head (get-resource-store))]
+            {:status 200
+             :body   (if raw?
+                       (mapv (fn [m] (update m :id str)) msgs)
+                       (mapv (fn [m]
+                               (cond-> {:id      (str (:id m))
+                                        :role    (get m :role "")
+                                        :content (get m :content "")
+                                        :can_left (boolean (get m :can-left?))
+                                        :can_right (boolean (get m :can-right?))
+                                        :sibling_index (get m :sibling-index 1)
+                                        :sibling_total (get m :sibling-total 1)}
+                                 (= (get m :role "") "tool")
+                                 (assoc :tool_call_id (get m :tool_call_id ""))
+                                 (and (= (get m :role "") "assistant") (seq (get m :tool_calls)))
+                                 (assoc :tool_calls (get m :tool_calls))))
+                             msgs))}))))))
 
 (defn- switch-branch-handler
   "POST /api/conversations/:id/messages/:message_id/switch-left 或 switch-right。
-   找到该 message 的父，把父的 selected-next-id 换成左/右兄弟；然后返回当前分支最新消息列表。"
+   找到该 message 的父，把父的 selected-next-id 换成左/右兄弟；然后返回当前分支最新消息列表。
+   校验会话归属。"
   [request delta]
   (let [conn       db/conn
         id-str     (get-in request [:path-params :id])
         msg-id-str (get-in request [:path-params :message_id])
         raw?       (get-in request [:query-params "raw"])
+        user-id    (resolve-user-uuid request)
         conv-id    (when id-str (try (java.util.UUID/fromString id-str) (catch Exception _ nil)))
-        message-id (when msg-id-str (try (java.util.UUID/fromString msg-id-str) (catch Exception _ nil)))]
+        message-id (when msg-id-str (try (java.util.UUID/fromString msg-id-str) (catch Exception _ nil)))
+        conv-owner (when conv-id (conversation/get-conversation-user-id conn conv-id))
+        allowed?   (when conv-id
+                    (or (= conv-owner user-id)
+                        (nil? conv-owner)
+                        (= conv-owner default-user-id)))]
     (if (or (nil? conv-id) (nil? message-id))
       {:status 400 :body {"error" "Invalid conversation id or message id"}}
-      (if (conversation/change-next! conn delta message-id)
-        (let [tip (conversation/get-current-head conn conv-id)
-              msgs (conversation/get-messages conn conv-id tip (get-resource-store))]
-          {:status 200
-           :body   (if raw?
-                     (mapv (fn [m] (update m :id str)) msgs)
-                     (mapv (fn [m]
-                             (cond-> {:id      (str (:id m))
-                                      :role    (get m :role "")
-                                      :content (get m :content "")
-                                      :can_left (boolean (get m :can-left?))
-                                      :can_right (boolean (get m :can-right?))
-                                      :sibling_index (get m :sibling-index 1)
-                                      :sibling_total (get m :sibling-total 1)}
-                               (= (get m :role "") "tool")
-                               (assoc :tool_call_id (get m :tool_call_id ""))
-                               (and (= (get m :role "") "assistant") (seq (get m :tool_calls)))
-                               (assoc :tool_calls (get m :tool_calls))))
-                           msgs))})
-        {:status 400 :body {"error" "No sibling in that direction"}}))))
+      (if-not allowed?
+        {:status 403 :body {"error" "Forbidden"}}
+        (if (conversation/change-next! conn delta message-id)
+          (let [tip  (conversation/get-current-head conn conv-id)
+                msgs (conversation/get-messages conn conv-id tip (get-resource-store))]
+            {:status 200
+             :body   (if raw?
+                       (mapv (fn [m] (update m :id str)) msgs)
+                       (mapv (fn [m]
+                               (cond-> {:id      (str (:id m))
+                                        :role    (get m :role "")
+                                        :content (get m :content "")
+                                        :can_left (boolean (get m :can-left?))
+                                        :can_right (boolean (get m :can-right?))
+                                        :sibling_index (get m :sibling-index 1)
+                                        :sibling_total (get m :sibling-total 1)}
+                                 (= (get m :role "") "tool")
+                                 (assoc :tool_call_id (get m :tool_call_id ""))
+                                 (and (= (get m :role "") "assistant") (seq (get m :tool_calls)))
+                                 (assoc :tool_calls (get m :tool_calls))))
+                             msgs))})
+          {:status 400 :body {"error" "No sibling in that direction"}})))))
 
 (defn switch-left-handler [request]
   (switch-branch-handler request -1))
@@ -410,12 +444,12 @@
                        (not (str/blank? q)) (assoc :q q))
             result   (ms/list-content mem opts)]
         {:status 200
-         :body   {"items"       (mapv (fn [m]
-                                        {"id"         (:id m)
-                                         "content"    (:content m)
-                                         "created_at" (when-let [t (:created-at m)]
-                                                        (str (java.time.Instant/ofEpochMilli (long t))))})
-                                 (:items result))
+         :body   {"items"        (mapv (fn [m]
+                                         {"id"         (:id m)
+                                          "content"    (:content m)
+                                          "created_at" (when-let [t (:created-at m)]
+                                                         (str (java.time.Instant/ofEpochMilli (long t))))})
+                                       (:items result))
                   "total_count" (:total-count result)}})
       (catch Throwable t
         {:status 500 :body {"error" (str (.getMessage t))}}))

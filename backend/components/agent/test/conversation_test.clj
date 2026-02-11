@@ -6,6 +6,7 @@
             [resource-store :as res]))
 
 (def ^:private test-db-name "afu-conversation-test")
+(def ^:private test-user-id #uuid "00000000-0000-0000-0000-000000000001")
 
 (def ^:dynamic *conn* nil)
 (def ^:dynamic *resource-store* nil)
@@ -41,12 +42,12 @@
 
 (deftest create!-returns-uuid
   (testing "create! 返回新会话的 uuid"
-    (let [id (conv/create! *conn* *resource-store*)]
+    (let [id (conv/create! *conn* *resource-store* test-user-id)]
       (is (instance? java.util.UUID id)))))
 
 (deftest get-messages-empty-after-create
   (testing "新建会话后 get-messages 返回空 vector"
-    (let [id (conv/create! *conn* *resource-store*)]
+    (let [id (conv/create! *conn* *resource-store* test-user-id)]
       (is (= [] (conv/get-messages *conn* id *resource-store*))))))
 
 (deftest get-messages-nonexistent
@@ -55,7 +56,7 @@
 
 (deftest append-messages!
   (testing "append-messages! 追加后 get-messages 能取到（含 :id :can-left? :can-right?）"
-    (let [id (conv/create! *conn* *resource-store*)
+    (let [id (conv/create! *conn* *resource-store* test-user-id)
           user-msg {:role "user" :content "你好"}
           assistant-msg {:role "assistant" :content "你好，有什么可以帮你？"}]
       (conv/append-messages! *conn* id [user-msg assistant-msg] *resource-store*)
@@ -65,7 +66,7 @@
 
 (deftest append-messages!-accumulates
   (testing "多次 append 按顺序累积"
-    (let [id (conv/create! *conn* *resource-store*)]
+    (let [id (conv/create! *conn* *resource-store* test-user-id)]
       (conv/append-messages! *conn* id [{:role "user" :content "1"} {:role "assistant" :content "a"}] *resource-store*)
       (conv/append-messages! *conn* id [{:role "user" :content "2"} {:role "assistant" :content "b"}] *resource-store*)
       (is (= [{:role "user" :content "1"}
@@ -76,14 +77,14 @@
 
 (deftest append-messages!-empty-no-op
   (testing "空列表 append 不报错、不改变内容"
-    (let [id (conv/create! *conn* *resource-store*)]
+    (let [id (conv/create! *conn* *resource-store* test-user-id)]
       (conv/append-messages! *conn* id [{:role "user" :content "x"}] *resource-store*)
       (conv/append-messages! *conn* id [] *resource-store*)
       (is (= [{:role "user" :content "x"}] (mapv #(select-keys % [:role :content]) (conv/get-messages *conn* id *resource-store*)))))))
 
 (deftest fork-append-after-prev
   (testing "在 prev 后追加且 update-main-head? false 时，当前分支 tip 不变（fork 语义，selected-next-id 未改）"
-    (let [id (conv/create! *conn* *resource-store*)]
+    (let [id (conv/create! *conn* *resource-store* test-user-id)]
       (conv/append-messages! *conn* id [{:role "user" :content "1"} {:role "assistant" :content "a"}] *resource-store*)
       (let [main-tip (conv/get-current-head *conn* id)]
         (conv/append-messages! *conn* id [{:role "user" :content "fork"} {:role "assistant" :content "fork-reply"}]
@@ -93,7 +94,7 @@
 
 (deftest delete-message-relinks
   (testing "delete-message! 删除当前 tip 后链表重连，当前分支 tip 变为前一条"
-    (let [id (conv/create! *conn* *resource-store*)]
+    (let [id (conv/create! *conn* *resource-store* test-user-id)]
       (conv/append-messages! *conn* id [{:role "user" :content "1"} {:role "assistant" :content "a"}] *resource-store*)
       (conv/append-messages! *conn* id [{:role "user" :content "2"} {:role "assistant" :content "b"}] *resource-store*)
       (let [tip (conv/get-current-head *conn* id)
@@ -106,7 +107,7 @@
 
 (deftest delete-conversation-removes-all
   (testing "delete-conversation! 删除会话下所有 message 及会话本身"
-    (let [id (conv/create! *conn* *resource-store*)]
+    (let [id (conv/create! *conn* *resource-store* test-user-id)]
       (conv/append-messages! *conn* id [{:role "user" :content "x"}] *resource-store*)
       (is (= 1 (count (conv/get-messages *conn* id *resource-store*))))
       (conv/delete-conversation! *conn* id *resource-store*)
@@ -115,7 +116,7 @@
 
 (deftest compute-head-from
   (testing "从某 message 开始 compute-head-from 返回自身；顺藤摸瓜沿 selected-next-id 走到无后继"
-    (let [id (conv/create! *conn* *resource-store*)]
+    (let [id (conv/create! *conn* *resource-store* test-user-id)]
       (conv/append-messages! *conn* id [{:role "user" :content "1"} {:role "assistant" :content "a"}] *resource-store*)
       (let [h (conv/get-current-head *conn* id)]
         (is (= h (conv/compute-head-from *conn* h)) "从 tip 算 tip 即自身"))
@@ -125,7 +126,7 @@
 
 (deftest get-messages-includes-id-and-can-left-right
   (testing "get-messages 每条含 :id :can-left? :can-right?；有多个后继的那条上 can-left? 或 can-right? 依当前选中是否最左/最右"
-    (let [id (conv/create! *conn* *resource-store*)]
+    (let [id (conv/create! *conn* *resource-store* test-user-id)]
       (conv/append-messages! *conn* id [{:role "user" :content "1"} {:role "assistant" :content "a"}] *resource-store*)
       (let [a-id (conv/get-current-head *conn* id)]
         (conv/append-messages! *conn* id [{:role "user" :content "2"} {:role "assistant" :content "b"}] *resource-store*)
@@ -139,7 +140,7 @@
 
 (deftest left!-and-right!
   (testing "fork 后 left! / right! 切换选中的后继，返回新选中的 id；无左/右时返回 nil"
-    (let [id (conv/create! *conn* *resource-store*)]
+    (let [id (conv/create! *conn* *resource-store* test-user-id)]
       (conv/append-messages! *conn* id [{:role "user" :content "1"} {:role "assistant" :content "a"}] *resource-store*)
       (let [a-id (conv/get-current-head *conn* id)]
         (conv/append-messages! *conn* id [{:role "user" :content "2"} {:role "assistant" :content "b"}] *resource-store*)

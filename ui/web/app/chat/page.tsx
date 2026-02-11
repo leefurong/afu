@@ -514,7 +514,10 @@ export default function ChatPage() {
           const finalContent = streamingRef.current;
           const steps = streamStepsRef.current;
           const cid = opts?.conversation_id ?? conversationId;
-          if (opts?.conversation_id) setConversationId(opts.conversation_id);
+          if (opts?.conversation_id) {
+            setConversationId(opts.conversation_id);
+            listConversations().then(setConversationList).catch(() => {});
+          }
           setTargetParentId(null);
           setBranchFromRoot(false);
           setStreamingContent("");

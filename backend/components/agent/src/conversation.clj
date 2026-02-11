@@ -20,7 +20,11 @@
    {:db/ident       :conversation/root
     :db/valueType   :db.type/uuid
     :db/cardinality :db.cardinality/one
-    :db/doc         "会话的空根节点 message id；从 root 沿 selected-next-id 可推出当前分支 tip，无 head；首条真实消息挂在 root 下，便于「编辑第一条」时在 root 下切分支"}])
+    :db/doc         "会话的空根节点 message id；从 root 沿 selected-next-id 可推出当前分支 tip，无 head；首条真实消息挂在 root 下，便于「编辑第一条」时在 root 下切分支"}
+   {:db/ident       :conversation/user-id
+    :db/valueType   :db.type/uuid
+    :db/cardinality :db.cardinality/one
+    :db/doc         "所属用户 account/id；未登录时用 default-user-id"}])
 
 (def message-schema
   [{:db/ident       :message/id
@@ -90,15 +94,17 @@
 ;; ---------------------------------------------------------------------------
 
 (defn create!
-  "创建新会话，返回其 id（uuid）。同时创建一条空 root 消息，conversation/root 指向它；首条真实消息将挂在 root 下，便于「编辑第一条」时在 root 下切分支。"
-  [conn resource-store]
+  "创建新会话，返回其 id（uuid）。user-id 为 account/id（uuid），未登录时传 default-user-id。
+   同时创建一条空 root 消息，conversation/root 指向它；首条真实消息将挂在 root 下，便于「编辑第一条」时在 root 下切分支。"
+  [conn resource-store user-id]
   (when resource-store
     (let [conv-id (random-uuid)
           root-id (random-uuid)
           content-id (res/put! resource-store "{}")
           now (java.util.Date.)]
       (d/transact conn {:tx-data [{:conversation/id conv-id
-                                  :conversation/root root-id}
+                                  :conversation/root root-id
+                                  :conversation/user-id user-id}
                                  {:message/id root-id
                                   :message/conversation-id conv-id
                                   :message/next-ids []
@@ -111,6 +117,11 @@
   [conn conversation-id]
   (let [e (d/pull (d/db conn) [:conversation/root] [:conversation/id conversation-id])]
     (:conversation/root e)))
+
+(defn get-conversation-user-id
+  "返回会话的 user-id，无则 nil（旧数据未设 user-id）。"
+  [conn conversation-id]
+  (:conversation/user-id (d/pull (d/db conn) [:conversation/user-id] [:conversation/id conversation-id])))
 
 (defn compute-head-from
   "从 message-id 起沿 selected-next-id 走到无后继，返回当前分支 tip。
@@ -359,13 +370,30 @@
             (str (subs content 0 max-title-len) "…")
             content))))))
 
+(def ^:private default-user-id #uuid "00000000-0000-0000-0000-000000000000")
+
 (defn list-recent
-  "返回近期会话列表，需传入 resource-store 以生成 title。当前分支由 root + selected-next-id 推出。"
-  [conn resource-store]
+  "返回近期会话列表，按 user-id 过滤。user-id 为 account/id；未登录时传 default-user-id。
+  需传入 resource-store 以生成 title。当前分支由 root + selected-next-id 推出。
+  已登录用户仅看本人的；default 用户看 default + 无 user-id 的旧数据。"
+  [conn resource-store user-id]
   (if (nil? resource-store)
     []
-    (let [db (d/db conn)
-          conv-roots (d/q '[:find ?cid ?root :where [?e :conversation/id ?cid] [?e :conversation/root ?root]] db)
+    (let [db         (d/db conn)
+          user-id    (or user-id default-user-id)
+          own        (d/q '[:find ?cid ?root :in $ ?uid :where
+                            [?e :conversation/id ?cid] [?e :conversation/root ?root] [?e :conversation/user-id ?uid]]
+                          db user-id)
+          legacy     (when (= user-id default-user-id)
+                      (concat
+                       (d/q '[:find ?cid ?root :in $ ?def :where
+                              [?e :conversation/id ?cid] [?e :conversation/root ?root] [?e :conversation/user-id ?def]]
+                            db default-user-id)
+                       (d/q '[:find ?cid ?root :where
+                              [?e :conversation/id ?cid] [?e :conversation/root ?root]
+                              [(missing? $ ?e :conversation/user-id)]]
+                            db)))
+          conv-roots (vec (distinct (concat own (or legacy []))))
           with-time (for [[cid root] conv-roots
                           :when cid]
                       (let [tip (compute-head-from conn root)
